@@ -18,6 +18,10 @@ class FakeBackend:
         self.calls = []
 
     def ensure_network(self, project): return f"perch-{project}"
+    def ensure_egress_proxy(self, project, service, allow_hosts):
+        self.calls.append(("egress_proxy", service, list(allow_hosts)))
+    def attach_internal(self, project, name):
+        self.calls.append(("attach_internal", name))
     def fingerprint(self, svc): return ""
     def list_managed(self, project): return list(self._live.values())
     def get(self, project, name): return self._live.get(name)
@@ -266,6 +270,1166 @@ def test_api_topology_edges():
     names = {n["name"] for n in topo["nodes"]}
     assert names == {"db", "web"}
     assert {"from": "web", "to": "db"} in topo["edges"]
+
+
+# ---- C2: per-agent cryptographic identity (perch/identity.py) -----------
+from perch import identity as idmod  # noqa: E402
+
+
+def _principal(name="agent", scopes=("db",)):
+    return idmod.Principal(subject=idmod.subject_for("p", name, "agent"),
+                           kind="agent", project="p", scopes=list(scopes))
+
+
+def test_identity_roundtrip_and_tamper():
+    # Exhaustively cover every signing backend available in this install.
+    for signer in idmod.available_signers():
+        issued = idmod.issue(_principal(), signer=signer)
+        ident, key = issued.identity, issued.signing_key
+        challenge = idmod.new_challenge()
+        sig = idmod.sign(ident, key, challenge)
+        assert idmod.verify(ident, challenge, sig), f"{signer.alg} should verify"
+        # tampered signature is rejected
+        bad = bytearray(sig); bad[0] ^= 0xFF
+        assert not idmod.verify(ident, challenge, bytes(bad)), f"{signer.alg} tamper-sig"
+        # signature over a different challenge is rejected
+        assert not idmod.verify(ident, idmod.new_challenge(), sig), f"{signer.alg} wrong-challenge"
+        # a different identity's key does not validate
+        other = idmod.issue(_principal("other"), signer=signer)
+        assert not idmod.verify(other.identity, challenge, sig), f"{signer.alg} wrong-identity"
+
+
+def test_identity_default_signer_roundtrips():
+    issued = idmod.issue(_principal())
+    c = idmod.new_challenge()
+    assert idmod.verify(issued.identity, c, idmod.sign(issued.identity, issued.signing_key, c))
+
+
+def test_identity_public_key_secrecy_flag():
+    # HMAC verification material is the shared secret; Ed25519's is a real pubkey.
+    hmac_id = idmod.issue(_principal(), signer=idmod.HmacSigner()).identity
+    assert hmac_id.public_key_is_secret is True
+    assert hmac_id.redacted()["public_key"] == "<sealed>"
+    if idmod._HAVE_ED25519:
+        ed_id = idmod.issue(_principal(), signer=idmod.Ed25519Signer()).identity
+        assert ed_id.public_key_is_secret is False
+        assert ed_id.redacted()["public_key"] == ed_id.public_key
+
+
+def test_identity_subject_is_stable():
+    assert idmod.subject_for("p", "web") == idmod.subject_for("p", "web")
+    assert idmod.subject_for("p", "web") != idmod.subject_for("p", "api")
+
+
+def test_identity_serialization_roundtrip():
+    ident = idmod.issue(_principal(scopes=("db", "cache"))).identity
+    back = idmod.Identity.from_dict(ident.to_dict())
+    assert back == ident
+
+
+def test_identity_unknown_alg_raises():
+    ident = idmod.issue(_principal()).identity
+    bogus = idmod.Identity.from_dict({**ident.to_dict(), "alg": "rot13"})
+    try:
+        idmod.verify(bogus, idmod.new_challenge(), b"x")
+        assert False, "expected UnknownAlgorithm"
+    except idmod.UnknownAlgorithm:
+        pass
+    # an unhashable alg must also fail loud as UnknownAlgorithm, not crash
+    weird = idmod.Identity.from_dict(ident.to_dict()); weird.alg = ["hmac-sha256"]
+    try:
+        idmod.verify(weird, b"c", b"s"); assert False, "expected UnknownAlgorithm"
+    except idmod.UnknownAlgorithm:
+        pass
+
+
+def test_identity_store_verifies_by_subject():
+    store = idmod.IdentityStore()
+    issued = store.register(idmod.issue(_principal("agent")))
+    subject = issued.identity.subject
+    c = idmod.new_challenge()
+    sig = idmod.sign(issued.identity, issued.signing_key, c)
+    assert store.verify(subject, c, sig)
+    assert not store.verify("perch://p/agent/ghost", c, sig)   # unknown subject -> closed
+    assert not store.verify(subject, idmod.new_challenge(), sig)  # wrong challenge
+
+
+def test_identity_no_alg_downgrade_via_store():
+    # The Ed25519->HMAC downgrade: an attacker who knows only the published
+    # public key forges an HMAC tag over it. The store verifies against the
+    # TRUSTED stored record (alg=ed25519), so the forgery is rejected.
+    if not idmod._HAVE_ED25519:
+        return
+    store = idmod.IdentityStore()
+    issued = store.register(idmod.issue(_principal(), signer=idmod.Ed25519Signer()))
+    subject, c = issued.identity.subject, idmod.new_challenge()
+    pub = bytes.fromhex(issued.identity.public_key)
+    import hashlib as _h, hmac as _hm
+    forged_plain = _hm.new(pub, c, _h.sha256).digest()
+    forged_domain = _hm.new(pub, b"hmac-sha256\x00" + c, _h.sha256).digest()
+    assert not store.verify(subject, c, forged_plain)
+    assert not store.verify(subject, c, forged_domain)
+
+
+def test_identity_short_hmac_key_fails_closed():
+    # A degenerate/empty HMAC verification key must never validate.
+    import hashlib as _h, hmac as _hm
+    for pk in ("", "00"):
+        ident = idmod.Identity(subject="s", kind="agent", project="p", scopes=[],
+                               alg=idmod.HMAC_ALG, public_key=pk, created_at=0)
+        forged = _hm.new(bytes.fromhex(pk), b"hmac-sha256\x00c", _h.sha256).digest()
+        assert not idmod.verify(ident, b"c", forged)
+
+
+def test_identity_repr_redacts_secrets():
+    issued = idmod.issue(_principal(), signer=idmod.HmacSigner())
+    secret_hex = issued.identity.public_key
+    assert secret_hex not in repr(issued.identity)        # HMAC secret not in repr
+    assert "<sealed>" in repr(issued.identity)
+    assert secret_hex not in repr(issued)                 # nor via IssuedIdentity
+    assert issued.signing_key.hex() not in repr(issued)   # private key never rendered
+
+
+# ---- C1: short-lived scoped credential broker (perch/broker.py) ---------
+from perch import broker as brkmod  # noqa: E402
+from perch.dataplane import FakeDataPlane  # noqa: E402
+
+
+def _broker(scopes=("db",), clock=None):
+    store = idmod.IdentityStore()
+    issued = store.register(idmod.issue(_principal("agent", scopes)))
+    brk = brkmod.Broker(store, **({"clock": clock} if clock else {}))
+    return brk, issued
+
+
+def _proof(issued):
+    c = idmod.new_challenge()
+    return c, idmod.sign(issued.identity, issued.signing_key, c)
+
+
+def test_broker_issues_scoped_credential():
+    brk, issued = _broker(scopes=("db",))
+    sub = issued.identity.subject
+    c, p = _proof(issued)
+    cred = brk.issue(sub, "db", challenge=c, proof=p)
+    assert cred.resource == "db" and cred.token
+    assert brk.authorize(cred.token, "db")
+    assert not brk.authorize(cred.token, "cache")        # wrong resource
+    # requesting a resource the principal is not scoped for is denied (fail closed)
+    c2, p2 = _proof(issued)
+    try:
+        brk.issue(sub, "cache", challenge=c2, proof=p2); assert False, "expected deny"
+    except brkmod.BrokerDenied:
+        pass
+
+
+def test_broker_rejects_unverified_identity():
+    brk, issued = _broker()
+    sub = issued.identity.subject
+    # forged proof
+    try:
+        brk.issue(sub, "db", challenge=idmod.new_challenge(), proof=b"\x00" * 64)
+        assert False, "expected deny"
+    except brkmod.BrokerDenied:
+        pass
+    # unknown subject
+    c, p = _proof(issued)
+    try:
+        brk.issue("perch://p/agent/ghost", "db", challenge=c, proof=p)
+        assert False, "expected deny"
+    except brkmod.BrokerDenied:
+        pass
+
+
+def test_broker_ttl_expiry():
+    now = [1000.0]
+    brk, issued = _broker(clock=lambda: now[0])
+    c, p = _proof(issued)
+    cred = brk.issue(issued.identity.subject, "db", challenge=c, proof=p, ttl=1)
+    assert brk.authorize(cred.token, "db")               # valid at issue time
+    now[0] += 2
+    assert not brk.authorize(cred.token, "db")           # expired -> denied
+    assert brk.verify_token(cred.token) is None
+    assert cred.is_expired(now[0])
+
+
+def test_broker_token_tamper_and_foreign_issuer():
+    brk, issued = _broker()
+    c, p = _proof(issued)
+    cred = brk.issue(issued.identity.subject, "db", challenge=c, proof=p)
+    payload, sig = cred.token.split(".", 1)
+    flipped = ("A" if sig[0] != "A" else "B") + sig[1:]
+    assert brk.verify_token(payload + "." + flipped) is None     # bad signature
+    assert brk.verify_token("not-a-token") is None
+    other, _ = _broker()                                          # different issuer key
+    assert other.verify_token(cred.token) is None
+
+
+def test_broker_scope_in_credential():
+    brk, issued = _broker()
+    c, p = _proof(issued)
+    cred = brk.issue(issued.identity.subject, "db", challenge=c, proof=p,
+                     scopes=["postgres:read"])
+    assert brk.authorize(cred.token, "db", "postgres:read")
+    assert not brk.authorize(cred.token, "db", "postgres:write")
+
+
+def test_broker_ttl_is_bounded_and_validated():
+    brk, issued = _broker()
+    sub = issued.identity.subject
+    # over the hard ceiling, zero/negative, and non-numeric all fail closed
+    for bad in (brkmod.MAX_TTL + 1, 0, -5, "15m", True, [60]):
+        c, p = _proof(issued)
+        try:
+            brk.issue(sub, "db", challenge=c, proof=p, ttl=bad)
+            assert False, f"expected deny for ttl={bad!r}"
+        except brkmod.BrokerDenied:
+            pass
+    # a sane TTL still works
+    c, p = _proof(issued)
+    assert brk.issue(sub, "db", challenge=c, proof=p, ttl=brkmod.MAX_TTL).token
+    # the broker's own default TTL is bounded too
+    try:
+        brkmod.Broker(idmod.IdentityStore(), default_ttl=brkmod.MAX_TTL + 1)
+        assert False, "expected deny for oversized default_ttl"
+    except brkmod.BrokerDenied:
+        pass
+
+
+def test_broker_hmac_issuer_has_no_exportable_pubkey():
+    store = idmod.IdentityStore()
+    brk = brkmod.Broker(store, alg=idmod.HMAC_ALG)
+    try:
+        brk.issuer_public(); assert False, "HMAC must not export a verify key"
+    except brkmod.BrokerDenied:
+        pass
+    if idmod._HAVE_ED25519:                       # Ed25519 issuer CAN export a pubkey
+        ed = brkmod.Broker(idmod.IdentityStore(), alg=idmod.ED25519_ALG)
+        alg, pub = ed.issuer_public()
+        assert alg == idmod.ED25519_ALG and pub
+
+
+def test_identity_proof_not_replayable_as_broker_ticket():
+    # Purpose domain separation: an identity proof signed by a key must not pass
+    # as a broker ticket, even if an attacker could line up the keys.
+    store = idmod.IdentityStore()
+    issued = store.register(idmod.issue(_principal("agent", ("db",))))
+    c = idmod.new_challenge()
+    proof = idmod.sign(issued.identity, issued.signing_key, c)
+    # craft a "token" whose signature is actually an identity proof
+    import base64 as _b64
+    fake = _b64.urlsafe_b64encode(c).rstrip(b"=").decode() + "." + \
+        _b64.urlsafe_b64encode(proof).rstrip(b"=").decode()
+    brk = brkmod.Broker(store)
+    assert brk.verify_token(fake) is None
+
+
+def test_broker_envvar_collision_is_rejected():
+    # Two bindings normalizing to the same env var must fail loud, not drop one.
+    a = svc("worker", type="agent", bindings=["pg-main", "pg.main"])
+    a.identity = True
+    m = Manifest("p", [pg("pg-main"), pg("pg.main"), a])
+    rec = Reconciler(FakeBackend(), m, state=_state())
+    try:
+        rec._ctx(a, mint=True)
+        assert False, "expected collision error"
+    except ValueError as e:
+        assert "PERCH_CREDENTIAL_PG_MAIN" in str(e)
+
+
+# ---- C1 integration: bindings seam routes through the broker -------------
+def _agent_with_db(identity=True):
+    a = svc("worker", type="agent", bindings=["db"])
+    a.identity = identity
+    return Manifest("p", [pg("db"), a]), a
+
+
+def test_identity_postgres_redeems_into_per_run_credential():
+    # C5: an identity-enabled postgres binding gets a real but ephemeral per-run
+    # credential from the data plane -- not a ticket, and not the static password.
+    m, agent = _agent_with_db()
+    fdp = FakeDataPlane()
+    rec = Reconciler(FakeBackend(), m, state=_state(), dataplane=fdp)
+    # read-only (plan/drift): no minting, no provisioning
+    ro = dict(rec._binding_env(agent, mint=False))
+    assert ro.get("PERCH_IDENTITY_SUBJECT") and not fdp.provisioned
+    assert "DATABASE_URL" not in ro
+    # converge/run (mint): real per-run credential injected
+    env = dict(rec._ctx(agent, mint=True).env)
+    assert "perch_run_" in env["DATABASE_URL"]         # per-run role, not 'app'
+    assert "PERCH_CREDENTIAL_DB" not in env            # ticket redeemed, not handed over
+    g = fdp.provisioned[0]
+    assert g.service == "db" and g.stype == "postgres" and g.access == "write"
+
+
+def test_identity_unsupported_binding_falls_back_to_ticket():
+    # A binding the data plane can't redeem yet still gets the Phase-A ticket.
+    m, agent = _agent_with_db()
+    rec = Reconciler(FakeBackend(), m, state=_state(), dataplane=FakeDataPlane(supported=()))
+    env = dict(rec._ctx(agent, mint=True).env)
+    assert "PERCH_CREDENTIAL_DB" in env
+    assert rec._ensure_broker().authorize(env["PERCH_CREDENTIAL_DB"], "db")
+
+
+def test_identity_read_scope_narrows_access():
+    m, agent = _agent_with_db()
+    agent.identity = {"scopes": {"db": "read"}}
+    fdp = FakeDataPlane()
+    Reconciler(FakeBackend(), m, state=_state(), dataplane=fdp)._ctx(agent, mint=True)
+    assert fdp.provisioned[0].access == "read"
+
+
+def test_identity_expired_creds_are_reaped():
+    import tempfile
+    from perch.state import State
+    root = tempfile.mkdtemp()
+    st = State(root)
+    st.put("_dataplane", [{"stype": "postgres", "service": "db", "cid": "perch_run_old", "exp": 0}])
+    m, agent = _agent_with_db()
+    fdp = FakeDataPlane()
+    Reconciler(FakeBackend(), m, state=st, dataplane=fdp)._ctx(agent, mint=True)
+    assert ("postgres", "db", ["perch_run_old"]) in fdp.reaped     # expired role dropped
+
+
+def test_reap_keeps_records_when_reap_fails():
+    import tempfile
+    from perch.state import State
+
+    class FailingDataPlane(FakeDataPlane):
+        def reap(self, *a):
+            raise RuntimeError("datastore down")
+
+    root = tempfile.mkdtemp()
+    st = State(root)
+    st.put("_dataplane", [{"stype": "postgres", "service": "db", "cid": "perch_run_old", "exp": 0}])
+    m, agent = _agent_with_db()
+    Reconciler(FakeBackend(), m, state=st, dataplane=FailingDataPlane())._ctx(agent, mint=True)
+    # a failed reap must NOT drop the record -- it's retried next run
+    assert "perch_run_old" in [r["cid"] for r in st.get("_dataplane")]
+
+
+def test_identity_two_postgres_bindings_rejected():
+    a = svc("worker", type="agent", bindings=["db1", "db2"])
+    a.identity = True
+    m = Manifest("p", [pg("db1"), pg("db2"), a])
+    rec = Reconciler(FakeBackend(), m, state=_state(), dataplane=FakeDataPlane())
+    try:
+        rec._ctx(a, mint=True); assert False, "two postgres bindings must be rejected"
+    except ValueError as e:
+        assert "at most one per type" in str(e)
+
+
+def test_static_binding_path_preserved_without_identity():
+    m, _ = _agent_with_db(identity=None)            # identity off -> today's behavior
+    web = m.by_name()["worker"]
+    env = dict(Reconciler(FakeBackend(), m, state=_state())._ctx(web, mint=True).env)
+    assert env["DATABASE_URL"].startswith("postgresql://app:")   # static path intact
+    assert "PERCH_CREDENTIAL_DB" not in env
+
+
+def test_identity_optin_is_backwards_compatible():
+    base = svc("web", port=8080, bindings=["db"])
+    assert not base.identity_enabled
+    same = svc("web", port=8080, bindings=["db"]); same.identity = None
+    assert same.config_hash() == base.config_hash()             # absence == unchanged hash
+    on = svc("web", port=8080, bindings=["db"]); on.identity = True
+    assert on.config_hash() != base.config_hash()               # enabling = real change
+
+
+def test_broker_issuer_key_persists_across_reconcilers():
+    import tempfile
+    from perch.state import State
+    root = tempfile.mkdtemp()
+    m, agent = _agent_with_db()
+    rec = Reconciler(FakeBackend(), m, state=State(root), dataplane=FakeDataPlane())
+    rec._ctx(agent, mint=True)                       # creates + persists the issuer key
+    kp1 = rec._ensure_broker().issuer_keypair()
+    # a fresh reconciler over the same state reloads the identical issuer key
+    rec2 = Reconciler(FakeBackend(), m, state=State(root), dataplane=FakeDataPlane())
+    assert rec2._ensure_broker().issuer_keypair() == kp1
+
+
+# ---- C3: attestation before issuance (perch/attest.py) ------------------
+from perch import attest as atmod  # noqa: E402
+
+
+def test_attest_accept_and_deny():
+    exp = atmod.Expectation("sub", "srchash", "cfghash", "perch-p-worker")
+    at = atmod.Attestor([exp])
+    assert at.verify(atmod.Attestation("sub", "srchash", "cfghash", "perch-p-worker"))
+    # any single field mismatch is denied (swapped image, drifted config, wrong host)
+    assert not at.verify(atmod.Attestation("sub", "WRONG", "cfghash", "perch-p-worker"))
+    assert not at.verify(atmod.Attestation("sub", "srchash", "WRONG", "perch-p-worker"))
+    assert not at.verify(atmod.Attestation("sub", "srchash", "cfghash", "WRONG"))
+    # unknown subject -> closed
+    assert not at.verify(atmod.Attestation("other", "srchash", "cfghash", "perch-p-worker"))
+
+
+def test_broker_requires_attestation_when_configured():
+    store = idmod.IdentityStore()
+    issued = store.register(idmod.issue(_principal("agent", ("db",))))
+    sub = issued.identity.subject
+    at = atmod.Attestor([atmod.Expectation(sub, "s", "c", "perch-p-agent")])
+    brk = brkmod.Broker(store, attestor=at)
+    good = atmod.Attestation(sub, "s", "c", "perch-p-agent")
+
+    def fresh():
+        return _proof(issued)
+
+    # missing attestation -> deny
+    c, p = fresh()
+    try:
+        brk.issue(sub, "db", challenge=c, proof=p); assert False, "need attestation"
+    except brkmod.BrokerDenied:
+        pass
+    # matching attestation -> issued
+    c, p = fresh()
+    assert brk.issue(sub, "db", challenge=c, proof=p, attestation=good).token
+    # mismatched attestation (wrong config) -> deny
+    c, p = fresh()
+    bad = atmod.Attestation(sub, "s", "TAMPERED", "perch-p-agent")
+    try:
+        brk.issue(sub, "db", challenge=c, proof=p, attestation=bad); assert False
+    except brkmod.BrokerDenied:
+        pass
+    # attestation for a different subject than the requester -> deny
+    c, p = fresh()
+    other = atmod.Attestation("perch://p/agent/other", "s", "c", "perch-p-agent")
+    try:
+        brk.issue(sub, "db", challenge=c, proof=p, attestation=other); assert False
+    except brkmod.BrokerDenied:
+        pass
+
+
+def test_attestation_enforced_in_identity_path():
+    m, agent = _agent_with_db()
+    rec = Reconciler(FakeBackend(), m, state=_state(), dataplane=FakeDataPlane())
+    # minting succeeds only because a matching self-attestation was presented;
+    # the broker is configured with an attestor, so an absent/bad one would deny.
+    env = dict(rec._ctx(agent, mint=True).env)
+    assert "DATABASE_URL" in env
+    sub = env["PERCH_IDENTITY_SUBJECT"]
+    assert rec._attestor is not None and sub in rec._attestor
+
+
+# ---- C4: sealed secrets at rest (perch/crypto.py + state.py) -------------
+from pathlib import Path  # noqa: E402
+
+from perch import crypto as cryptomod  # noqa: E402
+
+
+def _sealers():
+    """Every sealing scheme available in this install (stdlib always; +Fernet)."""
+    key = b"unit-test-master-key-0123456789ab"
+    out = [cryptomod.Sealer(key, prefer_fernet=False)]          # PSL1 (stdlib)
+    if cryptomod._HAVE_FERNET:
+        out.append(cryptomod.Sealer(key, prefer_fernet=True))   # PSF1 (Fernet)
+    return out
+
+
+def test_seal_roundtrip_and_tamper():
+    for s in _sealers():
+        for pt in (b"", b"hunter2", b"\x00\x01\x02 binary \xff", "DATABASE_URL=secret".encode()):
+            token = s.seal(pt)
+            assert cryptomod.is_sealed(token)
+            assert s.unseal(token) == pt                         # round-trip
+        token = s.seal(b"sensitive-credential")
+        # flip one base64 char in the body -> authentication must fail (no plaintext)
+        scheme, _, body = token.partition(".")
+        bad = scheme + "." + (("A" if body[-1] != "A" else "B") + body[1:])
+        try:
+            s.unseal(bad); assert False, "tamper must be rejected"
+        except cryptomod.SealError:
+            pass
+
+
+def test_seal_wrong_key_and_unknown_scheme_fail_closed():
+    token = cryptomod.Sealer(b"key-A-0123456789abcdef0123456789").seal(b"secret")
+    try:
+        cryptomod.Sealer(b"key-B-0123456789abcdef0123456789").unseal(token)
+        assert False, "wrong key must fail"
+    except cryptomod.SealError:
+        pass
+    try:
+        cryptomod.Sealer(b"k" * 32).unseal("NOPE.deadbeef"); assert False
+    except cryptomod.SealError:
+        pass
+
+
+def test_state_ciphertext_at_rest_and_roundtrip():
+    import tempfile
+    from perch.state import State
+    root = tempfile.mkdtemp()
+    sealer = cryptomod.Sealer(b"state-master-key-0123456789abcdef")
+    st = State(root, sealer=sealer)
+    pw = st.secret("p", "db", "password")
+    st.put("_broker/issuer", {"alg": "ed25519", "private": "deadbeef"})
+    # on disk: ciphertext with a scheme tag, NOT the secret material
+    raw = (Path(root) / "state.json").read_text()
+    assert cryptomod.is_sealed(raw)
+    assert pw not in raw and "deadbeef" not in raw and "_broker/issuer" not in raw
+    # a new State with the same key reads the same values back
+    st2 = State(root, sealer=cryptomod.Sealer(b"state-master-key-0123456789abcdef"))
+    assert st2.secret("p", "db", "password") == pw
+    assert st2.get("_broker/issuer")["private"] == "deadbeef"
+
+
+def test_state_plaintext_without_key_unchanged():
+    import tempfile
+    from perch.state import State
+    root = tempfile.mkdtemp()
+    st = State(root, sealer=None)                  # no key -> prior behavior
+    pw = st.secret("p", "db", "password")
+    raw = (Path(root) / "state.json").read_text()
+    assert not cryptomod.is_sealed(raw)
+    assert pw in raw                               # cleartext on disk, exactly as before
+
+
+def test_sealed_state_without_key_fails_loud():
+    import tempfile
+    from perch.state import State
+    root = tempfile.mkdtemp()
+    State(root, sealer=cryptomod.Sealer(b"k" * 32)).secret("p", "db", "password")
+    try:
+        State(root, sealer=None)                   # sealed file, no key -> must not wipe
+        assert False, "expected SealError, not silent reset"
+    except cryptomod.SealError:
+        pass
+
+
+def test_seal_rejects_weak_master_key():
+    for weak in (b"", b"short", b"0123456789abcde"):    # empty and < 16 bytes
+        try:
+            cryptomod.Sealer(weak); assert False, f"weak key {weak!r} must be rejected"
+        except cryptomod.SealError:
+            pass
+    assert cryptomod.Sealer(b"0123456789abcdef")        # exactly 16 bytes is OK
+
+
+def test_state_corrupt_cleartext_fails_loud():
+    import tempfile
+    from perch.state import State
+    root = tempfile.mkdtemp()
+    p = Path(root) / "state.json"
+    p.write_text("{ this is not valid json")            # non-empty, unparseable
+    try:
+        State(root, sealer=None); assert False, "corrupt state must not be silently wiped"
+    except cryptomod.SealError:
+        pass
+    # an empty/whitespace file is still treated as empty state (not an error)
+    p.write_text("   \n")
+    assert State(root, sealer=None).secret("p", "db", "k")  # constructs fine
+
+
+def test_state_lazy_migration_to_sealed():
+    import tempfile
+    from perch.state import State
+    root = tempfile.mkdtemp()
+    plain = State(root, sealer=None)
+    pw = plain.secret("p", "db", "password")
+    assert pw in (Path(root) / "state.json").read_text()        # starts cleartext
+    sealer = cryptomod.Sealer(b"migrate-master-key-0123456789ab")
+    migrated = State(root, sealer=sealer)                        # read legacy cleartext
+    migrated.put("touch", 1)                                     # next write seals it
+    raw = (Path(root) / "state.json").read_text()
+    assert cryptomod.is_sealed(raw) and pw not in raw
+    assert migrated.secret("p", "db", "password") == pw         # value preserved
+
+
+# ---- C7: authenticated control plane (perch/api.py) ---------------------
+from perch import api as apimod  # noqa: E402
+
+
+def test_auth_disabled_allows_everything():
+    pol = apimod.AuthPolicy(require=False)            # default: today's behavior
+    assert pol.check("GET", "/api/services", None) == 200
+    assert pol.check("POST", "/api/apply", None) == 200
+
+
+def test_auth_401_403_200_matrix():
+    pol = apimod.AuthPolicy({"ADM": "admin", "VW": "viewer"}, require=True)
+    # unauthenticated reads/writes -> 401
+    assert pol.check("GET", "/api/services", None) == 401
+    assert pol.check("GET", "/api/services", "wrong") == 401
+    assert pol.check("POST", "/api/apply", None) == 401
+    # viewer: may read, may not write -> 403
+    assert pol.check("GET", "/api/services", "VW") == 200
+    assert pol.check("POST", "/api/apply", "VW") == 403
+    # admin: full access
+    assert pol.check("GET", "/api/services", "ADM") == 200
+    assert pol.check("POST", "/api/apply", "ADM") == 200
+    # static console assets stay public even with auth on
+    assert pol.check("GET", "/", None) == 200
+    assert pol.check("GET", "/app.js", None) == 200
+
+
+def test_api_token_parsing_and_loading():
+    assert apimod._parse_tokens("a:admin, b:viewer ,c") == {"a": "admin", "b": "viewer", "c": "admin"}
+    import tempfile
+    toks = apimod.load_api_tokens(root=tempfile.mkdtemp(), env={"PERCH_API_TOKENS": "x:viewer"})
+    assert toks == {"x": "viewer"}
+
+
+def test_auth_token_validation_fails_closed():
+    # empty role after a colon must NOT silently become admin
+    assert apimod._parse_tokens("tok:") == {}
+    # unknown role is skipped, not granted
+    assert apimod._parse_tokens("tok:superuser") == {}
+    # a bare token (no colon) still defaults to admin (documented)
+    assert apimod._parse_tokens("solo") == {"solo": "admin"}
+    # well-formed entries still parse, role case-normalized
+    assert apimod._parse_tokens("a:ADMIN, b:viewer") == {"a": "admin", "b": "viewer"}
+
+
+def test_auth_non_ascii_token_is_clean_401_not_500():
+    pol = apimod.AuthPolicy({"ADM": "admin"}, require=True)
+    assert pol.role_for("tokén") is None                 # no TypeError/crash
+    assert pol.check("GET", "/api/services", "café") == 401
+
+
+def test_load_api_tokens_json_normalizes_and_skips_unknown():
+    import json as _json, tempfile
+    root = tempfile.mkdtemp()
+    (Path(root) / "api_tokens.json").write_text(_json.dumps({"good": "Admin", "bad": "root"}))
+    assert apimod.load_api_tokens(root=root, env={}) == {"good": "admin"}   # bad role dropped
+
+
+def test_auth_enforced_through_http_handler():
+    # Drive the real handler with a fake request to confirm the gate is wired.
+    import io
+    web = svc("web", port=8080)
+    api = apimod.PerchAPI(Manifest("p", [web]), backend=FakeBackend(), state=_state())
+    policy = apimod.AuthPolicy({"ADM": "admin"}, require=True)
+    Handler = apimod.make_handler(api, policy)
+
+    def request(method, path, token=None):
+        captured = {}
+
+        class FakeHandler(Handler):
+            def __init__(self):                       # bypass socket setup
+                self.headers = {"Authorization": f"Bearer {token}"} if token else {}
+                self.command, self.path = method, path
+                self.wfile = io.BytesIO()
+            def send_response(self, code, *a): captured["code"] = code
+            def send_header(self, *a): pass
+            def end_headers(self): pass
+        h = FakeHandler()
+        h.do_POST() if method == "POST" else h.do_GET()
+        return captured.get("code")
+
+    assert request("GET", "/api/services") == 401           # no token
+    assert request("POST", "/api/apply", "ADM") == 200      # admin write ok
+    assert request("GET", "/api/services", "ADM") == 200     # admin read ok
+    assert request("GET", "/index.html") == 200             # static is public
+
+
+# ---- C5/C6: identity-aware data plane (perch/dataplane.py) ---------------
+from perch import dataplane as dpmod  # noqa: E402
+
+
+def test_pg_provision_sql_scopes_read_vs_write():
+    role = dpmod.pg_role_name("abc123")
+    assert role == "perch_run_abc123"
+    read = dpmod.pg_provision_sql(role, "pw", "read", 900)
+    write = dpmod.pg_provision_sql(role, "pw", "write", 900)
+    # both create a non-inheriting login role expiring on the SERVER clock
+    for sql in (read, write):
+        assert "CREATE ROLE perch_run_abc123 LOGIN NOINHERIT" in sql
+        assert "make_interval(secs => 900)" in sql and "VALID UNTIL %L" in sql
+        assert "GRANT SELECT ON ALL TABLES" in sql
+    # only write grants mutation; read must not
+    assert "INSERT, UPDATE, DELETE" not in read
+    assert "INSERT, UPDATE, DELETE" in write
+
+
+def test_pg_provision_sql_escapes_password_quote():
+    sql = dpmod.pg_provision_sql("perch_run_x", "a'b", "read", 900)
+    assert "PASSWORD 'a''b'" in sql                       # single quote doubled
+
+
+def test_pg_reap_expired_sql_targets_only_expired():
+    sql = dpmod.pg_reap_expired_sql()
+    assert "rolvaliduntil < now()" in sql                 # server decides what's expired
+    assert "DROP OWNED BY" in sql and "DROP ROLE" in sql
+    assert "perch\\_run\\_%" in sql                       # only Perch per-run roles
+
+
+def test_postgres_bootstrap_revokes_public_execute():
+    spec = catalog.spec_for(pg("db"), "p", _state(), Manifest("p", [pg("db")]))
+    assert "REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM PUBLIC" in spec.init_sql
+
+
+def test_pg_connection_env_uses_per_run_role():
+    env = dpmod.pg_connection_env("p", "db", "perch_run_x", "secret")
+    assert env["PGUSER"] == "perch_run_x"
+    assert env["DATABASE_URL"] == "postgresql://perch_run_x:secret@perch-p-db:5432/app"
+
+
+def test_docker_dataplane_supports_all_datastores():
+    dp = dpmod.DockerDataPlane(FakeBackend())
+    assert dp.supports("postgres") and dp.supports("cache") and dp.supports("storage")
+    assert not dp.supports("webapp")
+
+
+def test_redis_acl_setuser_scopes_read_vs_write():
+    read = dpmod.redis_acl_setuser_args("perch_run_x", "pw", "read")
+    write = dpmod.redis_acl_setuser_args("perch_run_x", "pw", "write")
+    assert read[:6] == ["redis-cli", "ACL", "SETUSER", "perch_run_x", "reset", "on"]
+    assert ">pw" in read and "~*" in read
+    # read: read commands but not @dangerous (no KEYS/FLUSHALL/CONFIG); no writes
+    assert "+@read" in read and "-@dangerous" in read and "+@all" not in read
+    assert "+@all" in write and "-@dangerous" in write        # write: data ops, no admin
+
+
+def test_minio_provision_commands_scope_to_builtin_policy():
+    read = dpmod.minio_provision_commands("root", "rootpw", "ak", "sk", "read")
+    write = dpmod.minio_provision_commands("root", "rootpw", "ak", "sk", "write")
+    assert read[0][:3] == ["mc", "alias", "set"]
+    assert write[1][:4] == ["mc", "admin", "user", "add"]
+    assert "readonly" in read[2] and "--user" in read[2] and "ak" in read[2]
+    assert "readwrite" in write[2]
+
+
+def test_redis_and_minio_connection_env():
+    assert dpmod.redis_connection_env("p", "cache", "u", "pw")["REDIS_URL"] == \
+        "redis://u:pw@perch-p-cache:6379"
+    s = dpmod.minio_connection_env("p", "files", "ak", "sk", ["media"])
+    assert s["S3_ACCESS_KEY"] == "ak" and s["S3_BUCKETS"] == "media"
+    assert s["S3_ENDPOINT"] == "http://perch-p-files:9000"
+
+
+def test_identity_cache_redeems_into_per_run_user():
+    a = svc("worker", type="agent", bindings=["cache"]); a.identity = True
+    m = Manifest("p", [Service(name="cache", type="cache"), a])
+    fdp = FakeDataPlane()
+    env = dict(Reconciler(FakeBackend(), m, state=_state(), dataplane=fdp)._ctx(a, mint=True).env)
+    assert "perch_run_" in env["REDIS_URL"]
+    assert fdp.provisioned[0].stype == "cache" and fdp.provisioned[0].access == "write"
+
+
+def test_apply_reaps_expired_creds_in_steady_state():
+    import tempfile
+    from perch.state import State
+    root = tempfile.mkdtemp()
+    st = State(root)
+    st.put("_dataplane", [{"stype": "cache", "service": "cache", "cid": "perch_run_old", "exp": 0}])
+    cache = Service(name="cache", type="cache")
+    # cache already running and up to date -> noop; no workload reconverges, yet
+    # the apply-level sweep must still reap the expired per-run user.
+    live = LiveService("cache", "running", cache.source_hash(""), cache.config_hash(), health="none")
+    fdp = FakeDataPlane()
+    Reconciler(FakeBackend([live]), Manifest("p", [cache]), state=st, dataplane=fdp).apply()
+    assert ("cache", "cache", ["perch_run_old"]) in fdp.reaped
+
+
+def test_storage_reap_after_service_removed_uses_state_creds():
+    import tempfile
+    from perch.state import State
+    root = tempfile.mkdtemp()
+    st = State(root)
+    st.put("p/files/user", "rootuser")            # previously-provisioned root keys
+    st.put("p/files/password", "rootpw")
+    st.put("_dataplane", [{"stype": "storage", "service": "files", "cid": "perch_run_old", "exp": 0}])
+    captured = {}
+
+    class CapturingDP(FakeDataPlane):
+        def reap(self, project, stype, service, cids, admin=None):
+            captured["admin"] = admin
+            super().reap(project, stype, service, cids, admin)
+
+    # 'files' is gone from the manifest -> admin recovered from state for reaping
+    rec = Reconciler(FakeBackend(), Manifest("p", []), state=st, dataplane=CapturingDP())
+    rec._reap_dataplane(rec._ensure_dataplane(), 999)
+    assert captured["admin"] == {"user": "rootuser", "password": "rootpw"}
+
+
+def test_identity_storage_redeems_with_admin_and_buckets():
+    a = svc("worker", type="agent", bindings=["files"]); a.identity = {"scopes": {"files": "read"}}
+    m = Manifest("p", [Service(name="files", type="storage", buckets=["media"]), a])
+    fdp = FakeDataPlane()
+    env = dict(Reconciler(FakeBackend(), m, state=_state(), dataplane=fdp)._ctx(a, mint=True).env)
+    assert "perch_run_" in env["S3_ACCESS_KEY"]
+    g = fdp.provisioned[0]
+    assert g.stype == "storage" and g.access == "read"          # scope narrowed to read
+    assert g.admin and g.admin.get("user") and g.buckets == ["media"]   # admin + buckets resolved
+
+
+# ---- C8: egress control / network segmentation (perch/egress.py) --------
+from perch import egress as egmod  # noqa: E402
+
+
+def test_egress_policy_normalizes_and_fails_closed():
+    assert egmod.policy(None) == ("all", [])           # absent -> full egress (compat)
+    assert egmod.policy("all") == ("all", [])
+    assert egmod.policy("deny") == ("deny", [])
+    assert egmod.policy({"allow": ["api.x.com", " b.com "]}) == ("allow", ["api.x.com", "b.com"])
+    assert egmod.policy("nonsense") == ("deny", [])    # explicit-but-unknown -> fail closed
+
+
+def test_egress_network_selection():
+    assert egmod.network_for("p", None) == "perch-p"            # full egress -> main
+    assert egmod.network_for("p", "deny") == "perch-p-internal"
+    assert egmod.network_for("p", {"allow": ["x"]}) == "perch-p-internal"
+
+
+def test_egress_proxy_config_default_deny_and_filter():
+    cfg = egmod.tinyproxy_config()
+    assert "FilterDefaultDeny Yes" in cfg and "FilterURLs Off" in cfg   # host-only match
+    flt = egmod.tinyproxy_filter(["api.anthropic.com"])
+    assert r"api\.anthropic\.com$" in flt              # anchored host pattern (subdomains ok)
+
+
+def test_egress_allow_keeps_managed_hosts_reachable():
+    # bound managed services must bypass the proxy (NO_PROXY), or HTTP datastores
+    # behind the default-deny proxy would be unreachable.
+    agent = svc("worker", type="agent", bindings=["files"])
+    agent.egress = {"allow": ["api.x.com"]}
+    m = Manifest("p", [Service(name="files", type="storage", buckets=["b"]), agent])
+    env = dict(Reconciler(FakeBackend(), m, state=_state())._ctx(agent).env)
+    assert "perch-p-files" in env["NO_PROXY"]
+
+
+def test_egress_optin_is_backwards_compatible():
+    base = svc("web", port=8080)
+    assert base.egress_policy == ("all", [])
+    same = svc("web", port=8080); same.egress = None
+    assert same.config_hash() == base.config_hash()    # absence -> unchanged hash
+    locked = svc("web", port=8080); locked.egress = "deny"
+    assert locked.config_hash() != base.config_hash()  # enabling is a real change
+
+
+def test_reconcile_egress_deny_uses_internal_network():
+    agent = svc("worker", type="agent"); agent.egress = "deny"
+    ctx = Reconciler(FakeBackend(), Manifest("p", [agent]), state=_state())._ctx(agent)
+    assert ctx.network == "perch-p-internal"
+    assert "HTTP_PROXY" not in dict(ctx.env)            # deny needs no proxy
+
+
+def test_reconcile_egress_allow_sets_proxy_env():
+    agent = svc("worker", type="agent"); agent.egress = {"allow": ["api.x.com"]}
+    ctx = Reconciler(FakeBackend(), Manifest("p", [agent]), state=_state())._ctx(agent)
+    assert ctx.network == "perch-p-internal"
+    env = dict(ctx.env)
+    assert env["HTTP_PROXY"] == "http://perch-p-egress-worker:8888"
+
+
+def test_reconcile_managed_attaches_both_networks():
+    m = Manifest("p", [pg("db")])
+    ctx = Reconciler(FakeBackend(), m, state=_state())._ctx(m.services[0])
+    assert ctx.network == "perch-p" and ctx.extra_networks == ["perch-p-internal"]
+
+
+def test_apply_brings_up_egress_proxy_for_allow_workload():
+    agent = svc("worker", type="agent"); agent.egress = {"allow": ["api.x.com"]}
+    fb = FakeBackend()
+    Reconciler(fb, Manifest("p", [agent]), state=_state()).apply()
+    assert ("egress_proxy", "worker", ["api.x.com"]) in fb.calls
+
+
+def test_apply_attaches_managed_services_to_internal_network():
+    fb = FakeBackend()
+    Reconciler(fb, Manifest("p", [pg("db")]), state=_state()).apply()
+    assert ("attach_internal", "db") in fb.calls       # idempotent upgrade attach
+
+
+# ---- C9: MCP & tool-call mediation (perch/mediation.py) -----------------
+from perch import mediation as medmod  # noqa: E402
+
+
+def test_tool_policy_default_deny():
+    pol = medmod.ToolPolicy()                          # empty allowlist
+    assert not pol.authorized("github.create_issue")
+    assert pol.authorize("anything").reason == "no allow rule matched (default deny)"
+
+
+def test_tool_policy_glob_patterns():
+    pol = medmod.ToolPolicy(["github.*", "fs.read_*", "search.query"])
+    assert pol.authorized("github.create_issue")       # server wildcard
+    assert pol.authorized("fs.read_file") and not pol.authorized("fs.write_file")
+    assert pol.authorized("search.query") and not pol.authorized("search.delete")
+    assert not pol.authorized("payments.charge")       # default deny
+    assert medmod.ToolPolicy(["*"]).authorized("anything")   # allow-all
+
+
+def test_tool_policy_wildcard_does_not_cross_dot_boundary():
+    # '*' must not span the server.tool boundary -> can't escalate into a new segment
+    pol = medmod.ToolPolicy(["github.*", "fs.read_*"])
+    assert not pol.authorized("github.create_issue.extra")   # extra segment
+    assert not pol.authorized("fs.read_file.escalate")
+
+
+def test_tool_policy_pattern_metachars_are_literal():
+    # '[', ']', '?' in a pattern match literally, never as regex/glob classes
+    pol = medmod.ToolPolicy(["svc.tool[1]"])
+    assert pol.authorized("svc.tool[1]") and not pol.authorized("svc.tool1")
+
+
+def test_tool_policy_rejects_invalid_tool():
+    pol = medmod.ToolPolicy(["*"])
+    assert not pol.authorized("")                      # empty -> deny even under '*'
+    assert not pol.authorized(None)
+    assert not pol.authorized("github.x\nevil")        # control chars -> deny
+
+
+def test_mediation_audit_record_is_deterministic():
+    pol = medmod.ToolPolicy(["github.*"])
+    rec = medmod.audit_record("perch://p/agent/a", pol.authorize("github.x"), at=1000)
+    assert rec == {"subject": "perch://p/agent/a", "tool": "github.x",
+                   "allowed": True, "reason": "allowed by 'github.*'", "at": 1000}
+
+
+def test_manifest_mcp_policy_and_hash():
+    a = svc("worker", type="agent")
+    assert not a.mcp_enabled
+    base = a.config_hash()
+    a.mcp = {"allow": ["github.*"]}
+    assert a.mcp_enabled and a.mcp_policy().authorized("github.x")
+    assert a.config_hash() != base                     # enabling mcp is a real change
+
+
+def test_reconcile_mcp_does_not_inject_unbuilt_gateway():
+    # The gateway process isn't shipped yet, so we must NOT point the agent at a
+    # non-existent endpoint; the policy is declarative until the gateway lands.
+    a = svc("worker", type="agent"); a.mcp = {"allow": ["github.*"]}
+    env = dict(Reconciler(FakeBackend(), Manifest("p", [a]), state=_state())._ctx(a).env)
+    assert "PERCH_MCP_GATEWAY" not in env
+    assert a.mcp_policy().authorized("github.x")        # policy still available
+
+
+# ---- C10: agent memory integrity & provenance (perch/memory.py) ---------
+from perch import memory as memmod  # noqa: E402
+
+
+def test_memory_append_chain_and_verify():
+    log = memmod.MemoryLog()
+    r0 = log.append({"note": "hello"})
+    r1 = log.append({"note": "world"})
+    assert r0.prev_hash == memmod.GENESIS and r1.prev_hash == r0.hash   # provenance links
+    assert r0.seq == 0 and r1.seq == 1
+    assert log.verify() and log.head() == r1.hash
+
+
+def test_memory_detects_tampered_record():
+    log = memmod.MemoryLog()
+    log.append({"x": 1}); log.append({"x": 2})
+    log._records[0].data["x"] = 99                     # poison an earlier record in place
+    assert not log.verify()                            # hash no longer matches contents
+
+
+def test_memory_detects_reorder_and_truncation():
+    key = b"memory-anchor-key-0123456789abcd"
+    log = memmod.MemoryLog()
+    for i in range(4):
+        log.append({"i": i})
+    anchor = log.anchor(key)
+    assert log.verify_against(key, anchor)
+    # reorder -> chain breaks
+    reordered = memmod.MemoryLog(list(reversed(log.records())))
+    assert not reordered.verify()
+    # truncation: the shorter chain is internally consistent, but the anchor
+    # (which binds the length + head) no longer matches -> detected.
+    truncated = memmod.MemoryLog(log.records()[:3])
+    assert truncated.verify() and not truncated.verify_against(key, anchor)
+
+
+def test_memory_anchor_detects_whole_chain_forgery():
+    key = b"memory-anchor-key-0123456789abcd"
+    log = memmod.MemoryLog()
+    log.append({"real": 1}); log.append({"real": 2})
+    anchor = log.anchor(key)
+    # attacker rebuilds a *consistent* alternate chain (verify() passes) but can't
+    # reproduce the anchor without the key.
+    forged = memmod.MemoryLog()
+    forged.append({"fake": 1}); forged.append({"fake": 2})
+    assert forged.verify() and not forged.verify_against(key, anchor)
+
+
+def test_memory_anchor_rejects_short_key():
+    log = memmod.MemoryLog(); log.append({"x": 1})
+    try:
+        log.anchor(b"short"); assert False, "short key must be rejected"
+    except ValueError:
+        pass
+
+
+def test_memory_rejects_noncanonical_data():
+    log = memmod.MemoryLog()
+    for bad in ({1: "x"}, {"ok": float("nan")}, [{"nested": {2: "y"}}]):
+        try:
+            log.append(bad); assert False, f"non-canonical {bad!r} must be rejected"
+        except ValueError:
+            pass
+
+
+def test_memory_serialization_roundtrip_preserves_integrity():
+    key = b"memory-anchor-key-0123456789abcd"
+    log = memmod.MemoryLog()
+    for i in range(3):
+        log.append({"i": i})
+    anchor = log.anchor(key)
+    back = memmod.MemoryLog.from_dict(log.to_dict())
+    assert back.verify() and back.verify_against(key, anchor)
+
+
+# ---- C11: detection -- audit log, anomaly detector, quarantine ----------
+from perch import audit as auditmod  # noqa: E402
+
+
+def test_audit_log_is_tamper_evident():
+    key = b"audit-anchor-key-0123456789abcd!"
+    log = auditmod.AuditLog()
+    log.record(auditmod.ISSUE, "perch://p/agent/a", "db", at=1)
+    log.record(auditmod.DENY, "perch://p/agent/b", "cache", at=2)
+    anchor = log.anchor(key)
+    assert log.verify_against(key, anchor) and len(log.events()) == 2
+    log._log._records[0].data["subject"] = "perch://p/agent/evil"   # tamper
+    assert not log.verify_against(key, anchor)
+
+
+def test_detector_flags_excessive_failures():
+    events = ([{"subject": "s1", "kind": auditmod.DENY}] * 5 +
+              [{"subject": "s2", "kind": auditmod.ATTEST_FAIL}] * 3 +
+              [{"subject": "s3", "kind": auditmod.ISSUE}] * 10)
+    anomalies = auditmod.Detector().scan(events)
+    flagged = {a.subject for a in anomalies}
+    assert "s1" in flagged and "s2" in flagged    # over thresholds
+    assert "s3" not in flagged                      # successful issues aren't anomalies
+
+
+def test_quarantine_roundtrip():
+    q = auditmod.Quarantine()
+    q.add("perch://p/agent/a")
+    assert "perch://p/agent/a" in q
+    assert auditmod.Quarantine.from_dict(q.to_dict()).subjects() == ["perch://p/agent/a"]
+
+
+def test_broker_audits_and_refuses_quarantined_subject():
+    store = idmod.IdentityStore()
+    issued = store.register(idmod.issue(_principal("agent", ("db",))))
+    sub = issued.identity.subject
+    audit = auditmod.AuditLog()
+    quar = auditmod.Quarantine()
+    brk = brkmod.Broker(store, audit=audit, quarantine=quar, clock=lambda: 100)
+    # a normal issue is audited
+    c, p = _proof(issued)
+    brk.issue(sub, "db", challenge=c, proof=p)
+    assert any(e["kind"] == auditmod.ISSUE and e["subject"] == sub for e in audit.events())
+    # quarantine the subject -> the broker refuses and audits the denial
+    quar.add(sub)
+    c, p = _proof(issued)
+    try:
+        brk.issue(sub, "db", challenge=c, proof=p); assert False, "quarantined must deny"
+    except brkmod.BrokerDenied:
+        pass
+    assert any(e["kind"] == auditmod.DENY and "quarantined" in e["detail"] for e in audit.events())
+
+
+def test_reconcile_persists_tamper_evident_audit():
+    import tempfile
+    from perch.state import State
+    root = tempfile.mkdtemp()
+    m, agent = _agent_with_db()
+    Reconciler(FakeBackend(), m, state=State(root), dataplane=FakeDataPlane())._ctx(agent, mint=True)
+    st = State(root)
+    assert st.get("_audit") and st.get("_audit/anchor")          # audit + anchor persisted
+    # a fresh reconciler verifies the audit against its anchor and loads fine
+    Reconciler(FakeBackend(), m, state=State(root), dataplane=FakeDataPlane())._ensure_broker()
+    # tamper the persisted audit -> the next load must fail closed
+    bad = st.get("_audit"); bad["records"][0]["data"]["subject"] = "evil"; st.put("_audit", bad)
+    try:
+        Reconciler(FakeBackend(), m, state=State(root), dataplane=FakeDataPlane())._ensure_broker()
+        assert False, "tampered audit must fail closed"
+    except ValueError as e:
+        assert "tamper" in str(e)
+
+
+def test_detection_loop_quarantines_then_broker_denies():
+    # end-to-end: repeated denials -> detector flags -> quarantine -> broker denies
+    store = idmod.IdentityStore()
+    issued = store.register(idmod.issue(_principal("agent", ("db",))))
+    sub = issued.identity.subject
+    audit = auditmod.AuditLog(); quar = auditmod.Quarantine()
+    brk = brkmod.Broker(store, audit=audit, quarantine=quar, clock=lambda: 1)
+    for _ in range(5):                              # 5 out-of-scope (denied) attempts
+        c, p = _proof(issued)
+        try:
+            brk.issue(sub, "cache", challenge=c, proof=p)   # not scoped for cache
+        except brkmod.BrokerDenied:
+            pass
+    for a in auditmod.Detector().scan(audit.events()):
+        quar.add(a.subject)
+    assert sub in quar                              # flagged + quarantined
+    c, p = _proof(issued)
+    try:
+        brk.issue(sub, "db", challenge=c, proof=p); assert False   # even a valid request denied
+    except brkmod.BrokerDenied:
+        pass
+
+
+# ---- C12: supply-chain integrity (perch/supplychain.py) -----------------
+from perch import supplychain as scmod  # noqa: E402
+
+_PIN = "sha256:" + "a" * 64                               # a well-formed digest
+_PIN2 = "sha256:" + "b" * 64
+
+
+def test_parse_image_components():
+    r = scmod.parse_image(f"ghcr.io/acme/app:1.2@{_PIN}")
+    assert r.registry == "ghcr.io" and r.repo == "acme/app" and r.tag == "1.2"
+    assert r.digest == _PIN and r.pinned
+    d = scmod.parse_image("redis:7-alpine")               # default registry, no digest
+    assert d.registry == "docker.io" and d.repo == "redis" and d.tag == "7-alpine"
+    assert not d.pinned
+    assert not scmod.parse_image("a@sha256:abc").pinned   # short digest is NOT a pin
+
+
+def test_digest_policy_requires_pin_and_registry():
+    pol = scmod.DigestPolicy(require_pinned=True, allow_registries=["ghcr.io"])
+    assert pol.check(f"ghcr.io/acme/app@{_PIN}")[0]               # pinned + allowed
+    assert not pol.check("ghcr.io/acme/app:latest")[0]           # unpinned -> deny
+    assert not pol.check("ghcr.io/acme/app@sha256:abc")[0]       # malformed digest -> deny
+    assert not pol.check(f"docker.io/acme/app@{_PIN}")[0]        # registry not allowed
+    assert pol.check(None)[0]                                     # built locally -> ok
+
+
+def test_digest_policy_actual_digest_fail_closed():
+    pol = scmod.DigestPolicy(require_pinned=True)
+    assert pol.check_actual(f"ghcr.io/a@{_PIN}", _PIN)[0]
+    assert not pol.check_actual(f"ghcr.io/a@{_PIN}", _PIN2)[0]    # mismatch
+    assert not pol.check_actual(f"ghcr.io/a@{_PIN}", "")[0]       # unresolved -> fail closed
+
+
+def test_supply_chain_optin_is_backwards_compatible():
+    base = svc("web", port=8080)
+    assert base.supply_chain_policy() is None
+    same = svc("web", port=8080); same.verify = None
+    assert same.config_hash() == base.config_hash()
+    pinned = svc("web", port=8080); pinned.verify = {"pin": True}
+    assert pinned.config_hash() != base.config_hash()
+
+
+def test_apply_blocks_unpinned_image_under_policy():
+    s = Service(name="app", type="webapp", image="acme/app:latest", verify={"pin": True})
+    rec = Reconciler(FakeBackend(), Manifest("p", [s]), state=_state())
+    try:
+        rec.apply(); assert False, "unpinned image must be blocked"
+    except ValueError as e:
+        assert "not pinned" in str(e)
+    # a pinned image is allowed to run
+    ok = Service(name="app", type="webapp", image=f"acme/app@{_PIN}", verify={"pin": True})
+    fb = FakeBackend()
+    Reconciler(fb, Manifest("p", [ok]), state=_state()).apply()
+    assert ("converge", "app") in fb.calls
+
+
+def test_apply_blocks_managed_unpinned_image_under_policy():
+    # C12 must check the CATALOG image for managed services, not svc.image (None).
+    db = pg("db"); db.verify = {"pin": True}              # pgvector:pgN is not pinned
+    rec = Reconciler(FakeBackend(), Manifest("p", [db]), state=_state())
+    try:
+        rec.apply(); assert False, "unpinned catalog image must be blocked"
+    except ValueError as e:
+        assert "not pinned" in str(e)
 
 
 if __name__ == "__main__":

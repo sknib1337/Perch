@@ -1,9 +1,18 @@
 # Perch
 
-Host your own apps and agents — with a real backend — on infrastructure you
-operate. You describe what you want to run in one file, run one command, and
-Perch builds it, runs it safely, gives it a web address with automatic HTTPS,
-and keeps it running. No managed-platform account, no monthly platform bill.
+A secure-by-default runtime for self-hosted apps and **AI agents**. You describe
+what you want to run in one file, run one command, and Perch builds it, runs it
+under hardened defaults, gives it a web address with automatic HTTPS, and keeps it
+running — on infrastructure you operate. No managed-platform account, no monthly
+platform bill.
+
+Agents are treated as a distinct risk: a single workload can be given its own
+short-lived, least-privilege identity and hold no long-lived secrets. The
+identity controls are opt-in and fully backwards compatible (off by default,
+existing `perch.yaml` files are unchanged): per-agent cryptographic identity, a
+credential broker that issues per-run, scoped, short-TTL credentials in place of a
+permanent `DATABASE_URL`, attestation before issuance, envelope-encrypted state at
+rest, and an authenticated control-plane API. See [THREAT_MODEL.md](THREAT_MODEL.md).
 
 ## The idea in 20 seconds
 
@@ -11,6 +20,9 @@ and keeps it running. No managed-platform account, no monthly platform bill.
 - An **agent** is a background helper (a Claude-powered assistant, a daily job).
 - A **managed service** is a ready-made backend block Perch runs for you — a
   Postgres database, object storage, a cache, an auto-generated API, or auth.
+- **Secure by default**: containers run non-root with dropped capabilities, and an
+  agent can be given a short-lived, least-privilege identity instead of a permanent
+  secret (opt-in; see [THREAT_MODEL.md](THREAT_MODEL.md)).
 - You list these in one file (`perch.yaml`), run `perch up`, and Perch wires them
   together and brings everything online. You own the box.
 

@@ -37,6 +37,11 @@ perch = "perch.cli:main"
 
 [project.optional-dependencies]
 dev = ["pytest>=7", "build", "twine"]
+# Optional crypto upgrade for the secure-by-default identity spine: when present,
+# Perch issues Ed25519 identities (asymmetric: the broker verifies with a public
+# key it cannot forge) instead of the stdlib HMAC default. Never required --
+# stdlib remains the baseline, and PERCH_CRYPTO_BACKEND=stdlib forces it off.
+crypto = ["cryptography>=42"]
 
 [tool.setuptools.dynamic]
 version = { attr = "perch.__version__" }

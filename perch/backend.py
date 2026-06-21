@@ -46,16 +46,19 @@ class ManagedSpec:
 class RenderContext:
     """Everything a backend needs to materialize one service."""
     project: str
-    network: str
+    network: str                        # primary network to run on
     source_hash: str
     config_hash: str
     env: list[tuple[str, str]] = field(default_factory=list)
     spec: ManagedSpec | None = None     # set for managed services; None for build/run apps
+    extra_networks: list[str] = field(default_factory=list)  # also attach (C8 segmentation)
 
 
 @runtime_checkable
 class Backend(Protocol):
     def ensure_network(self, project: str) -> str: ...
+    def ensure_egress_proxy(self, project: str, service: str, allow_hosts: list[str]) -> None: ...  # C8
+    def attach_internal(self, project: str, name: str) -> None: ...   # C8: managed svc on internal net
     def list_managed(self, project: str) -> list[LiveService]: ...
     def get(self, project: str, name: str) -> LiveService | None: ...
     def converge(self, svc: Service, ctx: RenderContext) -> None: ...   # build/spec + (re)create

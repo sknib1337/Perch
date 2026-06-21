@@ -98,6 +98,56 @@ class Service:
     backup: dict | None = None         # {schedule: cron, retain: N}
     bindings: list[str] = field(default_factory=list)     # managed services to wire in
     runtime: str | None = None         # function: node22 | python312 | deno (base image hint)
+    # ---- identity (C1/C2) -- opt-in; absent => today's static credential path ---
+    identity: "bool | dict | None" = None   # true, or {ttl: <seconds>}: broker per-run creds
+    # ---- egress (C8) -- opt-in; absent => today's full outbound internet --------
+    egress: "str | dict | None" = None       # all | deny | {allow: [host, ...]}
+    # ---- mcp/tool mediation (C9) -- opt-in; absent => no mediation --------------
+    mcp: "dict | None" = None                # {allow: [tool-glob, ...]}
+    # ---- supply-chain integrity (C12) -- opt-in; absent => no pin enforcement ---
+    verify: "dict | None" = None             # {pin: bool, registries: [...]}
+
+    def supply_chain_policy(self):
+        if not self.verify:
+            return None
+        from .supplychain import DigestPolicy
+        return DigestPolicy(require_pinned=bool(self.verify.get("pin", False)),
+                            allow_registries=self.verify.get("registries"))
+
+    @property
+    def egress_policy(self) -> "tuple[str, list]":
+        from .egress import policy
+        return policy(self.egress)
+
+    @property
+    def mcp_enabled(self) -> bool:
+        return bool(self.mcp)
+
+    def mcp_policy(self):
+        from .mediation import ToolPolicy
+        return ToolPolicy((self.mcp or {}).get("allow", []))
+
+    @property
+    def identity_enabled(self) -> bool:
+        return bool(self.identity)
+
+    @property
+    def identity_ttl(self) -> "int | None":
+        return self.identity.get("ttl") if isinstance(self.identity, dict) else None
+
+    @property
+    def identity_scopes(self) -> dict:
+        return self.identity.get("scopes", {}) if isinstance(self.identity, dict) else {}
+
+    def identity_access(self, binding: str) -> str:
+        """Least-privilege level for a bound datastore: 'read' or 'write'.
+        Defaults to 'write' (preserves the capability a static credential had, so
+        opting into identity doesn't silently break writes); narrow per binding
+        with `identity: {scopes: {<binding>: read}}`."""
+        val = self.identity_scopes.get(binding)
+        if val is None:
+            return "write"
+        return "read" if str(val).strip().lower() in ("read", "ro", "readonly", "read-only") else "write"
 
     @property
     def is_managed(self) -> bool:
@@ -137,6 +187,16 @@ class Service:
             "buckets": sorted(self.buckets), "database": self.database,
             "backup": self.backup, "bindings": sorted(self.bindings),
         }
+        # Only include identity/egress when set, so existing manifests hash exactly
+        # as before (no spurious recreate on upgrade); enabling them is a real change.
+        if self.identity:
+            basis["identity"] = self.identity
+        if self.egress:
+            basis["egress"] = self.egress
+        if self.mcp:
+            basis["mcp"] = self.mcp
+        if self.verify:
+            basis["verify"] = self.verify
         return _sha(basis)
 
     def resolved_env(self) -> list[tuple[str, str]]:
@@ -167,6 +227,10 @@ class Service:
             backup=d.get("backup"),
             bindings=d.get("bindings", []),
             runtime=d.get("runtime"),
+            identity=d.get("identity"),
+            egress=d.get("egress"),
+            mcp=d.get("mcp"),
+            verify=d.get("verify"),
         )
 
 
