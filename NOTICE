@@ -1,0 +1,25 @@
+Perch
+Copyright 2026 The Perch Contributors
+
+This product is licensed under the Apache License, Version 2.0 (the "License").
+A copy of the License is in the LICENSE file, or at:
+    http://www.apache.org/licenses/LICENSE-2.0
+
+--------------------------------------------------------------------------------
+Third-party components
+
+Perch orchestrates and connects to third-party software that it pulls at run
+time. It does not vendor or redistribute any third-party source code in this
+repository. Each component remains under its own license, held by its respective
+owner:
+
+  * Container images for managed services (for example: Postgres with the
+    pgvector extension, Redis, an S3-compatible object store, an auto-generated
+    REST layer, and an identity service) are pulled from their official
+    registries at run time.
+  * Python dependency: PyYAML (MIT License).
+  * The web console loads assets from public CDNs at run time, each under its own
+    license -- e.g. the Inter and JetBrains Mono typefaces (SIL Open Font
+    License 1.1) and utility CSS / icon fonts (MIT / Apache-2.0).
+
+If you redistribute Perch, keep this NOTICE file with it (Apache-2.0 section 4d).

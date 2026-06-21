@@ -1,0 +1,69 @@
+name: release
+
+# Publishes perch-host to PyPI when a GitHub Release is published.
+# Uses PyPI Trusted Publishing (OIDC) -- no API tokens are stored anywhere.
+# One-time setup is in RELEASING.md.
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pyyaml
+      - run: python tests/test_reconcile.py
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Verify the release tag matches perch.__version__
+        run: |
+          VERSION=$(python -c "import re,pathlib; print(re.search(r'__version__\s*=\s*[\"\x27]([^\"\x27]+)', pathlib.Path('perch/__init__.py').read_text()).group(1))")
+          TAG="${GITHUB_REF_NAME#v}"
+          echo "package version: $VERSION    release tag: $GITHUB_REF_NAME"
+          if [ "$VERSION" != "$TAG" ]; then
+            echo "::error::Release tag '$GITHUB_REF_NAME' does not match perch.__version__ ($VERSION). Bump perch/__init__.py to $TAG (or retag) and re-release."
+            exit 1
+          fi
+      - name: Build sdist + wheel
+        run: |
+          pip install build pyyaml
+          python -m build
+      - name: Validate metadata
+        run: |
+          pip install twine
+          twine check dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/perch-host
+    permissions:
+      id-token: write          # required for Trusted Publishing (OIDC)
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1

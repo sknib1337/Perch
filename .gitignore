@@ -1,0 +1,22 @@
+# Perch local state -- contains generated managed-service credentials
+.perch/
+# generated proxy config
+Caddyfile
+__pycache__/
+*.pyc
+# Python build artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+# Redundant local snapshot archives
+*.zip
+# Local agent / editor / OS config -- keep out of the public repo
+.claude/
+CLAUDE.md
+.cursor/
+.vscode/
+.idea/
+*.code-workspace
+.DS_Store
+Thumbs.db

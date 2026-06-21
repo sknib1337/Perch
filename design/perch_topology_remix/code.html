@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Perch - Topology</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&amp;family=JetBrains+Mono:wght@400;500;700&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+          darkMode: "class",
+          theme: {
+            extend: {
+              "colors": {
+                      "background": "#060913",
+                      "surface": "#060913",
+                      "surface-dim": "#060913",
+                      "surface-container-lowest": "#04060c",
+                      "surface-container-low": "#0a0e1c",
+                      "surface-container": "#0e1326",
+                      "surface-container-high": "#131a33",
+                      "surface-container-highest": "#1a2240",
+                      "on-background": "#dae2fd",
+                      "on-surface": "#dae2fd",
+                      "on-surface-variant": "#bdc8d1",
+                      "primary": "#8ed5ff",
+                      "primary-fixed-dim": "#7bd0ff",
+                      "on-primary": "#00354a",
+                      "secondary": "#4de082",
+                      "on-secondary": "#003919",
+                      "tertiary": "#ffc42f",
+                      "on-tertiary": "#402d00",
+                      "error": "#ffb4ab",
+                      "on-error": "#690005",
+                      "outline": "#87929a",
+                      "outline-variant": "#3e484f",
+                      "error-container": "#93000a",
+                      "on-error-container": "#ffdad6",
+              },
+              "borderRadius": {
+                      "DEFAULT": "0.125rem",
+                      "lg": "0.25rem",
+                      "xl": "0.5rem",
+                      "full": "0.75rem"
+              },
+              "spacing": {
+                      "panel-padding": "20px",
+                      "gutter": "16px",
+                      "margin": "24px",
+                      "unit": "4px"
+              },
+              "fontFamily": {
+                      "body-sm": ["Inter"],
+                      "code-sm": ["JetBrains Mono"],
+                      "label-caps": ["JetBrains Mono"],
+                      "code-md": ["JetBrains Mono"],
+                      "headline-md": ["Inter"],
+                      "body-md": ["Inter"],
+                      "headline-lg": ["Inter"]
+              }
+            },
+          },
+        }
+    </script>
+<style>
+        .topology-grid {
+            background-color: #060913;
+            background-image: 
+                linear-gradient(30deg, rgba(62, 72, 79, 0.05) 12%, transparent 12.5%, transparent 87%, rgba(62, 72, 79, 0.05) 87.5%, rgba(62, 72, 79, 0.05)),
+                linear-gradient(150deg, rgba(62, 72, 79, 0.05) 12%, transparent 12.5%, transparent 87%, rgba(62, 72, 79, 0.05) 87.5%, rgba(62, 72, 79, 0.05)),
+                linear-gradient(30deg, rgba(62, 72, 79, 0.05) 12%, transparent 12.5%, transparent 87%, rgba(62, 72, 79, 0.05) 87.5%, rgba(62, 72, 79, 0.05)),
+                linear-gradient(150deg, rgba(62, 72, 79, 0.05) 12%, transparent 12.5%, transparent 87%, rgba(62, 72, 79, 0.05) 87.5%, rgba(62, 72, 79, 0.05)),
+                linear-gradient(60deg, rgba(62, 72, 79, 0.05) 25%, transparent 25.5%, transparent 75%, rgba(62, 72, 79, 0.05) 75%, rgba(62, 72, 79, 0.05)),
+                linear-gradient(60deg, rgba(62, 72, 79, 0.05) 25%, transparent 25.5%, transparent 75%, rgba(62, 72, 79, 0.05) 75%, rgba(62, 72, 79, 0.05));
+            background-size: 80px 140px;
+            background-position: 0 0, 0 0, 40px 70px, 40px 70px, 0 0, 40px 70px;
+        }
+        .pulse-line {
+            stroke-dasharray: 8 8;
+            animation: dash 2s linear infinite;
+        }
+        @keyframes dash {
+            to { stroke-dashoffset: -16; }
+        }
+        .glass-node {
+            background: rgba(255, 255, 255, 0.03);
+            backdrop-filter: blur(8px);
+        }
+        .health-ring-healthy { border-color: rgba(16, 185, 129, 0.5); box-shadow: 0 0 20px 2px rgba(16, 185, 129, 0.2), inset 0 0 10px rgba(16, 185, 129, 0.1); }
+        .health-ring-warning { border-color: rgba(245, 158, 11, 0.6); box-shadow: 0 0 20px 2px rgba(245, 158, 11, 0.2), inset 0 0 10px rgba(245, 158, 11, 0.1); animation: pulse-warning 2s infinite; }
+        .health-ring-error { border-color: rgba(239, 68, 68, 0.8); box-shadow: 0 0 20px 2px rgba(239, 68, 68, 0.3), inset 0 0 10px rgba(239, 68, 68, 0.2); }
+        
+        @keyframes pulse-warning {
+            0%, 100% { opacity: 1; box-shadow: 0 0 20px 2px rgba(245, 158, 11, 0.2); }
+            50% { opacity: 0.8; box-shadow: 0 0 30px 4px rgba(245, 158, 11, 0.4); }
+        }
+
+        .pulse-ring::before {
+            content: '';
+            position: absolute;
+            inset: -4px;
+            border-radius: inherit;
+            border: 1px solid currentColor;
+            opacity: 0;
+            animation: pulse-ring 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+        @keyframes pulse-ring {
+            0% { transform: scale(1); opacity: 0.5; }
+            100% { transform: scale(1.3); opacity: 0; }
+        }
+    </style>
+</head>
+<body class="bg-background text-on-background antialiased h-screen w-full overflow-hidden flex font-body-md text-body-md">
+<!-- SideNavBar -->
+<nav class="fixed left-0 top-0 h-screen w-16 hover:w-64 flex flex-col py-panel-padding z-50 bg-surface-container-low/95 dark:bg-surface-container-low/95 backdrop-blur-xl border-r border-outline-variant/20 transition-all duration-300 group overflow-hidden shadow-2xl">
+<div class="px-4 mb-8 flex flex-col gap-2 min-w-[256px]">
+<div class="flex items-center gap-3">
+<div class="min-w-8 w-8 h-8 rounded bg-primary/10 flex items-center justify-center text-primary">
+<span class="material-symbols-outlined text-xl" data-weight="fill" style="font-variation-settings: 'FILL' 1;">terminal</span>
+</div>
+<div class="opacity-0 group-hover:opacity-100 transition-opacity duration-300 whitespace-nowrap">
+<h1 class="font-label-caps text-label-caps uppercase tracking-widest text-primary">Command Sidebar</h1>
+<p class="font-code-sm text-code-sm text-on-surface-variant">v2.4.0-stable</p>
+</div>
+</div>
+</div>
+<div class="flex-1 px-2 space-y-2 min-w-[256px]">
+<a class="flex items-center gap-4 px-2 py-2.5 rounded-lg bg-secondary/10 text-secondary border-l-2 border-secondary font-bold font-body-sm text-body-sm hover:bg-surface-container-high transition-all duration-150" href="#">
+<span class="material-symbols-outlined min-w-6 text-center">hub</span>
+<span class="opacity-0 group-hover:opacity-100 transition-opacity duration-300 whitespace-nowrap">Topology</span>
+</a>
+<a class="flex items-center gap-4 px-2 py-2.5 rounded-lg text-on-surface-variant hover:bg-surface-variant/30 font-body-sm text-body-sm hover:bg-surface-container-high transition-all duration-150" href="#">
+<span class="material-symbols-outlined min-w-6 text-center">layers</span>
+<span class="opacity-0 group-hover:opacity-100 transition-opacity duration-300 whitespace-nowrap">Services</span>
+</a>
+<a class="flex items-center gap-4 px-2 py-2.5 rounded-lg text-on-surface-variant hover:bg-surface-variant/30 font-body-sm text-body-sm hover:bg-surface-container-high transition-all duration-150" href="#">
+<span class="material-symbols-outlined min-w-6 text-center">rocket_launch</span>
+<span class="opacity-0 group-hover:opacity-100 transition-opacity duration-300 whitespace-nowrap">Deploy</span>
+</a>
+<a class="flex items-center gap-4 px-2 py-2.5 rounded-lg text-on-surface-variant hover:bg-surface-variant/30 font-body-sm text-body-sm hover:bg-surface-container-high transition-all duration-150" href="#">
+<span class="material-symbols-outlined min-w-6 text-center">security_update_warning</span>
+<span class="opacity-0 group-hover:opacity-100 transition-opacity duration-300 whitespace-nowrap">Drift/Audit</span>
+</a>
+<a class="flex items-center gap-4 px-2 py-2.5 rounded-lg text-on-surface-variant hover:bg-surface-variant/30 font-body-sm text-body-sm hover:bg-surface-container-high transition-all duration-150" href="#">
+<span class="material-symbols-outlined min-w-6 text-center">settings_backup_restore</span>
+<span class="opacity-0 group-hover:opacity-100 transition-opacity duration-300 whitespace-nowrap">Backups</span>
+</a>
+<a class="flex items-center gap-4 px-2 py-2.5 rounded-lg text-on-surface-variant hover:bg-surface-variant/30 font-body-sm text-body-sm hover:bg-surface-container-high transition-all duration-150" href="#">
+<span class="material-symbols-outlined min-w-6 text-center">description</span>
+<span class="opacity-0 group-hover:opacity-100 transition-opacity duration-300 whitespace-nowrap">Manifest</span>
+</a>
+</div>
+<div class="px-4 mt-auto min-w-[256px]">
+<div class="flex items-center gap-4 py-4 border-t border-outline-variant/20">
+<img alt="Perch System Avatar" class="min-w-8 w-8 h-8 rounded-full border border-outline-variant/30 object-cover" data-alt="A futuristic, glowing avatar image featuring a highly stylized, abstract geometric shape representing a system administrator or AI core, set against a dark, tech-focused background. High-contrast lighting with a subtle blue neon glow, embodying a 'calm mastery' command center aesthetic. High quality, crisp lines." src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw=="/>
+<span class="font-body-sm text-body-sm text-on-surface opacity-0 group-hover:opacity-100 transition-opacity duration-300 whitespace-nowrap">System Admin</span>
+</div>
+</div>
+</nav>
+<!-- Main Content Area -->
+<main class="flex-1 ml-16 flex flex-col h-screen relative transition-all duration-300">
+<!-- TopNavBar -->
+<header class="flex justify-between items-center w-full px-gutter h-16 sticky top-0 z-40 bg-surface/80 dark:bg-surface/80 backdrop-blur-md border-b border-outline-variant/30">
+<div class="flex items-center gap-4 w-1/3">
+<span class="font-headline-md text-headline-md font-bold text-primary dark:text-primary tracking-tight">Perch</span>
+</div>
+<!-- System Pulse Status Bar -->
+<div class="hidden md:flex flex-1 items-center justify-center gap-6 px-4">
+<div class="flex items-center gap-3 px-4 py-1.5 rounded-full bg-surface-container-high border border-outline-variant/20 shadow-inner">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-[16px] text-on-surface-variant">memory</span>
+<span class="font-code-sm text-[11px] text-on-surface">CPU: 42%</span>
+<div class="w-12 h-3 flex items-end gap-px opacity-70">
+<div class="w-1.5 h-1/3 bg-emerald-500"></div><div class="w-1.5 h-1/2 bg-emerald-500"></div><div class="w-1.5 h-full bg-emerald-500"></div><div class="w-1.5 h-2/3 bg-emerald-500"></div><div class="w-1.5 h-1/3 bg-emerald-500"></div>
+</div>
+</div>
+<div class="w-px h-4 bg-outline-variant/30"></div>
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-[16px] text-on-surface-variant">storage</span>
+<span class="font-code-sm text-[11px] text-on-surface">MEM: 78%</span>
+<div class="w-12 h-3 flex items-end gap-px opacity-70">
+<div class="w-1.5 h-1/2 bg-amber-500"></div><div class="w-1.5 h-2/3 bg-amber-500"></div><div class="w-1.5 h-3/4 bg-amber-500"></div><div class="w-1.5 h-full bg-amber-500"></div><div class="w-1.5 h-4/5 bg-amber-500"></div>
+</div>
+</div>
+<div class="w-px h-4 bg-outline-variant/30"></div>
+<div class="flex items-center gap-2 text-amber-500">
+<span class="material-symbols-outlined text-[16px]">warning</span>
+<span class="font-code-sm text-[11px]">DRIFT: 1</span>
+</div>
+</div>
+</div>
+<div class="flex items-center justify-end w-1/3 gap-4">
+<button class="w-10 h-10 rounded-full flex items-center justify-center text-on-surface-variant hover:text-primary transition-colors hover:bg-surface-variant/30">
+<span class="material-symbols-outlined">medical_services</span>
+</button>
+<button class="w-10 h-10 rounded-full flex items-center justify-center text-on-surface-variant hover:text-primary transition-colors hover:bg-surface-variant/30 relative">
+<span class="material-symbols-outlined">notifications</span>
+<span class="absolute top-2 right-2 w-2 h-2 rounded-full bg-error border-2 border-surface"></span>
+</button>
+<button class="w-10 h-10 rounded-full flex items-center justify-center text-on-surface-variant hover:text-primary transition-colors hover:bg-surface-variant/30">
+<span class="material-symbols-outlined">account_circle</span>
+</button>
+</div>
+</header>
+<!-- Command Canvas -->
+<div class="flex-1 overflow-hidden relative flex topology-grid">
+<!-- Topology Visualization Area -->
+<div class="flex-1 relative overflow-hidden flex items-center justify-center p-8">
+<!-- SVG Canvas for Edges -->
+<svg class="absolute inset-0 w-full h-full pointer-events-none z-0" style="min-width: 800px; min-height: 600px;">
+<defs>
+<lineargradient id="grad-healthy" x1="0%" x2="100%" y1="0%" y2="0%">
+<stop offset="0%" stop-color="#10b981" stop-opacity="0.2"></stop>
+<stop offset="100%" stop-color="#10b981" stop-opacity="0.8"></stop>
+</lineargradient>
+<lineargradient id="grad-warning" x1="0%" x2="100%" y1="0%" y2="0%">
+<stop offset="0%" stop-color="#10b981" stop-opacity="0.5"></stop>
+<stop offset="100%" stop-color="#f59e0b" stop-opacity="0.8"></stop>
+</lineargradient>
+<lineargradient id="grad-error" x1="0%" x2="100%" y1="0%" y2="0%">
+<stop offset="0%" stop-color="#10b981" stop-opacity="0.5"></stop>
+<stop offset="100%" stop-color="#ef4444" stop-opacity="0.8"></stop>
+</lineargradient>
+</defs>
+<!-- Edge: Ingress to Web -->
+<path class="pulse-line" d="M 300 300 C 400 300, 400 200, 500 200" fill="none" stroke="url(#grad-healthy)" stroke-width="2.5"></path>
+<!-- Edge: Web to Postgres -->
+<path class="pulse-line" d="M 540 200 C 650 200, 650 150, 750 150" fill="none" stroke="url(#grad-warning)" stroke-width="2.5"></path>
+<!-- Edge: Web to Redis -->
+<path class="pulse-line" d="M 540 200 C 650 200, 650 350, 750 350" fill="none" stroke="url(#grad-error)" stroke-width="2.5"></path>
+</svg>
+<!-- Nodes Container -->
+<div class="relative w-full h-full max-w-4xl max-h-[600px] z-10" style="min-width: 800px; min-height: 500px;">
+<!-- Node: Ingress (Healthy) -->
+<div class="absolute left-[15%] top-[50%] -translate-y-1/2 flex flex-col items-center gap-3 group cursor-pointer">
+<div class="w-16 h-16 rounded-xl glass-node border flex items-center justify-center text-emerald-400 health-ring-healthy pulse-ring relative transition-transform duration-300 group-hover:scale-110">
+<span class="material-symbols-outlined text-2xl">dns</span>
+</div>
+<div class="text-center bg-surface-container-low/80 px-3 py-1.5 rounded-md backdrop-blur border border-white/5">
+<span class="block font-code-sm text-code-sm text-on-surface">api-gateway</span>
+<span class="block font-code-sm text-[10px] text-emerald-400 mt-0.5">HEALTHY :8080</span>
+</div>
+</div>
+<!-- Node: WebApp (Healthy) -->
+<div class="absolute left-[50%] top-[30%] -translate-x-1/2 -translate-y-1/2 flex flex-col items-center gap-3 group cursor-pointer">
+<div class="w-20 h-20 rounded-xl glass-node border flex items-center justify-center text-emerald-400 health-ring-healthy pulse-ring relative transition-transform duration-300 group-hover:scale-110">
+<span class="material-symbols-outlined text-3xl">language</span>
+<div class="absolute -top-1.5 -right-1.5 w-4 h-4 bg-emerald-500 rounded-full border-2 border-surface shadow-[0_0_8px_#10b981]"></div>
+</div>
+<div class="text-center bg-surface-container-low/80 px-3 py-1.5 rounded-md backdrop-blur border border-white/5">
+<span class="block font-code-sm text-code-sm text-on-surface">perch-web-main</span>
+<span class="block font-code-sm text-[10px] text-emerald-400 mt-0.5">REPLICAS: 4/4</span>
+</div>
+</div>
+<!-- Node: Postgres (Warning/Drift) -->
+<div class="absolute right-[15%] top-[20%] translate-x-1/2 flex flex-col items-center gap-3 group cursor-pointer">
+<div class="w-16 h-16 rounded-xl glass-node border flex items-center justify-center text-amber-400 health-ring-warning relative transition-transform duration-300 group-hover:scale-110">
+<span class="material-symbols-outlined text-2xl">database</span>
+</div>
+<div class="text-center bg-surface-container-low/80 px-3 py-1.5 rounded-md backdrop-blur border border-white/5">
+<span class="block font-code-sm text-code-sm text-on-surface">pg-cluster-01</span>
+<span class="block font-code-sm text-[10px] text-amber-400 mt-0.5">DRIFT DETECTED</span>
+</div>
+</div>
+<!-- Node: Redis (Error) -->
+<div class="absolute right-[15%] bottom-[30%] translate-x-1/2 flex flex-col items-center gap-3 group cursor-pointer">
+<div class="w-16 h-16 rounded-xl glass-node border flex items-center justify-center text-red-400 health-ring-error relative transition-transform duration-300 group-hover:scale-110">
+<span class="material-symbols-outlined text-2xl">memory</span>
+</div>
+<div class="text-center bg-surface-container-low/80 px-3 py-1.5 rounded-md backdrop-blur border border-white/5">
+<span class="block font-code-sm text-code-sm text-on-surface">redis-cache</span>
+<span class="block font-code-sm text-[10px] text-red-400 mt-0.5">EXITED (137)</span>
+</div>
+</div>
+</div>
+</div>
+<!-- Right Sidebar: Drift Findings -->
+<div class="w-80 border-l border-outline-variant/20 bg-surface-container-low/90 backdrop-blur-xl flex flex-col z-20">
+<div class="p-4 border-b border-outline-variant/20 bg-surface-container/30">
+<h2 class="font-headline-sm text-headline-sm text-on-surface mb-1 font-semibold">Drift Findings</h2>
+<p class="font-body-sm text-body-sm text-on-surface-variant">Active anomalies in current topology.</p>
+</div>
+<div class="flex-1 overflow-y-auto p-4 space-y-4">
+<!-- Finding Item 1 -->
+<div class="p-4 rounded-xl bg-error/5 border border-error/20 flex flex-col gap-2 hover:bg-error/10 transition-colors cursor-pointer">
+<div class="flex items-center justify-between">
+<span class="font-code-sm text-[10px] font-bold tracking-wider text-red-400 bg-red-400/10 px-2 py-0.5 rounded">UNHEALTHY</span>
+<span class="font-code-sm text-code-sm text-on-surface-variant">2m ago</span>
+</div>
+<h3 class="font-code-sm text-body-md font-semibold text-red-100">redis-cache</h3>
+<p class="font-body-sm text-body-sm text-on-surface-variant">OOMKilled. Pod restarted 4 times in last 10 minutes.</p>
+<div class="mt-2 pt-2 border-t border-error/10 flex justify-end">
+<button class="font-code-sm text-code-sm text-red-400 hover:text-red-300 transition-colors">VIEW LOGS -&gt;</button>
+</div>
+</div>
+<!-- Finding Item 2 -->
+<div class="p-4 rounded-xl bg-surface-container border border-outline-variant/30 flex flex-col gap-2 hover:bg-surface-container-high transition-colors cursor-pointer">
+<div class="flex items-center justify-between">
+<span class="font-code-sm text-[10px] font-bold tracking-wider text-amber-400 bg-amber-400/10 px-2 py-0.5 rounded">DRIFT</span>
+<span class="font-code-sm text-code-sm text-on-surface-variant">15m ago</span>
+</div>
+<h3 class="font-code-sm text-body-md font-semibold text-on-surface">pg-cluster-01</h3>
+<p class="font-body-sm text-body-sm text-on-surface-variant">Configuration mismatch: max_connections defined as <span class="font-code-sm">200</span>, actual is <span class="font-code-sm">100</span>.</p>
+<div class="mt-2 pt-2 border-t border-outline-variant/20 flex justify-end">
+<button class="font-code-sm text-code-sm text-primary hover:text-primary-fixed transition-colors">COMPARE -&gt;</button>
+</div>
+</div>
+<!-- Finding Item 3 -->
+<div class="p-4 rounded-xl bg-surface-container border border-outline-variant/30 flex flex-col gap-2 hover:bg-surface-container-high transition-colors cursor-pointer">
+<div class="flex items-center justify-between">
+<span class="font-code-sm text-[10px] font-bold tracking-wider text-amber-400 bg-amber-400/10 px-2 py-0.5 rounded">MISSING</span>
+<span class="font-code-sm text-code-sm text-on-surface-variant">1h ago</span>
+</div>
+<h3 class="font-code-sm text-body-md font-semibold text-on-surface">storage-volume-claim</h3>
+<p class="font-body-sm text-body-sm text-on-surface-variant">PersistentVolumeClaim 'data-vol' not bound to any PersistentVolume.</p>
+<div class="mt-2 pt-2 border-t border-outline-variant/20 flex justify-end">
+<button class="font-code-sm text-code-sm text-primary hover:text-primary-fixed transition-colors">INSPECT -&gt;</button>
+</div>
+</div>
+</div>
+</div>
+</div>
+</main>
+</body></html>

@@ -1,0 +1,589 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Service Detail - Perch</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&amp;family=JetBrains+Mono:wght@400;500;700&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            "colors": {
+                    "on-primary": "#00354a",
+                    "on-secondary": "#003919",
+                    "primary-fixed-dim": "#7bd0ff",
+                    "on-primary-fixed-variant": "#004c69",
+                    "primary-container": "#38bdf8",
+                    "on-surface-variant": "#bdc8d1",
+                    "surface": "#0b1326",
+                    "on-primary-container": "#004965",
+                    "on-surface": "#dae2fd",
+                    "background": "#0b1326",
+                    "surface-container-highest": "#2d3449",
+                    "tertiary": "#ffc42f",
+                    "on-tertiary": "#402d00",
+                    "secondary-fixed-dim": "#4de082",
+                    "surface-container-high": "#222a3d",
+                    "on-secondary-container": "#003e1c",
+                    "surface-tint": "#7bd0ff",
+                    "surface-container-low": "#131b2e",
+                    "primary-fixed": "#c4e7ff",
+                    "surface-variant": "#2d3449",
+                    "error-container": "#93000a",
+                    "tertiary-fixed": "#ffdf9f",
+                    "surface-dim": "#0b1326",
+                    "inverse-primary": "#00668a",
+                    "primary": "#8ed5ff",
+                    "tertiary-fixed-dim": "#f9bd22",
+                    "secondary-container": "#00b55d",
+                    "surface-container": "#171f33",
+                    "inverse-surface": "#dae2fd",
+                    "outline-variant": "#3e484f",
+                    "outline": "#87929a",
+                    "tertiary-container": "#e1a800",
+                    "on-tertiary-fixed-variant": "#5c4300",
+                    "secondary-fixed": "#6dfe9c",
+                    "on-secondary-fixed": "#00210c",
+                    "on-secondary-fixed-variant": "#005227",
+                    "surface-container-lowest": "#060e20",
+                    "surface-bright": "#31394d",
+                    "on-tertiary-fixed": "#261a00",
+                    "secondary": "#4de082",
+                    "on-tertiary-container": "#584000",
+                    "error": "#ffb4ab",
+                    "on-primary-fixed": "#001e2c",
+                    "inverse-on-surface": "#283044",
+                    "on-error": "#690005",
+                    "on-error-container": "#ffdad6",
+                    "on-background": "#dae2fd",
+                    "cyber-blue": "#38bdf8"
+            },
+            "borderRadius": {
+                    "DEFAULT": "0.125rem",
+                    "lg": "0.25rem",
+                    "xl": "0.5rem",
+                    "full": "0.75rem"
+            },
+            "spacing": {
+                    "panel-padding": "20px",
+                    "gutter": "16px",
+                    "margin": "24px",
+                    "unit": "4px"
+            },
+            "fontFamily": {
+                    "body-sm": [
+                            "Inter"
+                    ],
+                    "code-sm": [
+                            "JetBrains Mono"
+                    ],
+                    "label-caps": [
+                            "JetBrains Mono"
+                    ],
+                    "code-md": [
+                            "JetBrains Mono"
+                    ],
+                    "headline-md": [
+                            "Inter"
+                    ],
+                    "body-md": [
+                            "Inter"
+                    ],
+                    "headline-lg": [
+                            "Inter"
+                    ]
+            },
+            "fontSize": {
+                    "body-sm": [
+                            "14px",
+                            {
+                                    "lineHeight": "20px",
+                                    "fontWeight": "400"
+                            }
+                    ],
+                    "code-sm": [
+                            "12px",
+                            {
+                                    "lineHeight": "16px",
+                                    "fontWeight": "500"
+                            }
+                    ],
+                    "label-caps": [
+                            "11px",
+                            {
+                                    "lineHeight": "16px",
+                                    "letterSpacing": "0.05em",
+                                    "fontWeight": "700"
+                            }
+                    ],
+                    "code-md": [
+                            "14px",
+                            {
+                                    "lineHeight": "20px",
+                                    "fontWeight": "400"
+                            }
+                    ],
+                    "headline-md": [
+                            "24px",
+                            {
+                                    "lineHeight": "32px",
+                                    "letterSpacing": "-0.01em",
+                                    "fontWeight": "600"
+                            }
+                    ],
+                    "body-md": [
+                            "16px",
+                            {
+                                    "lineHeight": "24px",
+                                    "fontWeight": "400"
+                            }
+                    ],
+                    "headline-lg": [
+                            "32px",
+                            {
+                                    "lineHeight": "40px",
+                                    "letterSpacing": "-0.02em",
+                                    "fontWeight": "600"
+                            }
+                    ]
+            }
+    },
+        },
+      }
+    </script>
+<style>
+        body {
+            background-color: #0b1326; /* theme('colors.surface') */
+            color: #dae2fd; /* theme('colors.on-surface') */
+        }
+        
+        .glass-panel {
+            background-color: rgba(30, 41, 59, 0.6); 
+            backdrop-filter: blur(16px);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            box-shadow: 0 4px 24px -1px rgba(0, 0, 0, 0.3);
+        }
+
+        .health-ring {
+            box-shadow: 0 0 0 2px theme('colors.secondary');
+        }
+
+        /* Syntax Highlighting Base */
+        .sh-key { color: theme('colors.cyber-blue'); }
+        .sh-string { color: theme('colors.tertiary'); }
+        .sh-comment { color: theme('colors.outline'); font-style: italic; }
+        
+        /* Custom scrollbar for terminal/logs */
+        .terminal-scroll::-webkit-scrollbar {
+            width: 8px;
+        }
+        .terminal-scroll::-webkit-scrollbar-track {
+            background: #060e20; /* surface-container-lowest */
+        }
+        .terminal-scroll::-webkit-scrollbar-thumb {
+            background: #2d3449; /* surface-variant */
+            border-radius: 4px;
+        }
+        .terminal-scroll::-webkit-scrollbar-thumb:hover {
+            background: #3e484f; /* outline-variant */
+        }
+
+        /* Terminal Scanlines */
+        .terminal-scanlines {
+            background: linear-gradient(
+                to bottom,
+                rgba(255,255,255,0),
+                rgba(255,255,255,0) 50%,
+                rgba(0,0,0,0.15) 50%,
+                rgba(0,0,0,0.15)
+            );
+            background-size: 100% 4px;
+            pointer-events: none;
+        }
+        
+        /* Telemetry Grid */
+        .telemetry-grid {
+            background-image: 
+                linear-gradient(to right, rgba(255,255,255,0.03) 1px, transparent 1px),
+                linear-gradient(to bottom, rgba(255,255,255,0.03) 1px, transparent 1px);
+            background-size: 20px 20px;
+        }
+    </style>
+</head>
+<body class="font-body-md text-body-md min-h-screen flex">
+<!-- SideNavBar -->
+<nav class="fixed left-0 top-0 h-screen w-60 flex flex-col py-panel-padding z-40 bg-surface-container-low/90 dark:bg-surface-container-low/90 backdrop-blur-xl border-r border-outline-variant/20 hidden md:flex">
+<!-- Header -->
+<div class="px-gutter mb-8">
+<div class="flex items-center gap-3">
+<div class="w-8 h-8 rounded bg-cyber-blue/20 flex items-center justify-center border border-cyber-blue/30">
+<span class="material-symbols-outlined text-cyber-blue text-xl" style="font-variation-settings: 'FILL' 1;">terminal</span>
+</div>
+<div>
+<h1 class="font-label-caps text-label-caps uppercase tracking-widest text-cyber-blue">Command Sidebar</h1>
+<p class="font-code-sm text-code-sm text-on-surface-variant">v2.4.0-stable</p>
+</div>
+</div>
+</div>
+<!-- Navigation Links -->
+<ul class="flex flex-col gap-1 flex-1 px-2">
+<li>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-on-surface-variant hover:bg-surface-variant/30 hover:text-on-surface transition-all duration-150" href="#">
+<span class="material-symbols-outlined" data-icon="hub">hub</span>
+<span class="font-body-sm text-body-sm">Topology</span>
+</a>
+</li>
+<li>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg bg-cyber-blue/10 text-cyber-blue border-r-2 border-cyber-blue font-bold hover:bg-surface-container-high transition-all duration-150 transform scale-[0.98]" href="#">
+<span class="material-symbols-outlined" data-icon="layers">layers</span>
+<span class="font-body-sm text-body-sm">Services</span>
+</a>
+</li>
+<li>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-on-surface-variant hover:bg-surface-variant/30 hover:text-on-surface transition-all duration-150" href="#">
+<span class="material-symbols-outlined" data-icon="rocket_launch">rocket_launch</span>
+<span class="font-body-sm text-body-sm">Deploy</span>
+</a>
+</li>
+<li>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-on-surface-variant hover:bg-surface-variant/30 hover:text-on-surface transition-all duration-150" href="#">
+<span class="material-symbols-outlined" data-icon="security_update_warning">security_update_warning</span>
+<span class="font-body-sm text-body-sm">Drift/Audit</span>
+</a>
+</li>
+<li>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-on-surface-variant hover:bg-surface-variant/30 hover:text-on-surface transition-all duration-150" href="#">
+<span class="material-symbols-outlined" data-icon="settings_backup_restore">settings_backup_restore</span>
+<span class="font-body-sm text-body-sm">Backups</span>
+</a>
+</li>
+<li>
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-on-surface-variant hover:bg-surface-variant/30 hover:text-on-surface transition-all duration-150" href="#">
+<span class="material-symbols-outlined" data-icon="description">description</span>
+<span class="font-body-sm text-body-sm">Manifest</span>
+</a>
+</li>
+</ul>
+<!-- Bottom Avatar/Profile (Placeholder for UI completeness) -->
+<div class="px-gutter mt-auto">
+<div class="flex items-center gap-3 p-2 rounded-lg hover:bg-surface-variant/30 cursor-pointer">
+<img alt="Perch System Avatar" class="w-8 h-8 rounded-full border border-outline-variant object-cover" data-alt="A small, stylized digital avatar of a glowing blue owl with circuitry patterns, suitable for a tech dashboard profile picture. Dark mode aesthetic." src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw=="/>
+<span class="font-body-sm text-body-sm text-on-surface-variant">System Admin</span>
+</div>
+</div>
+</nav>
+<!-- Main Content Area -->
+<div class="flex-1 flex flex-col md:ml-60 min-h-screen overflow-hidden">
+<!-- TopNavBar -->
+<header class="flex justify-between items-center w-full px-gutter h-16 sticky top-0 z-50 bg-surface/80 dark:bg-surface/80 backdrop-blur-md border-b border-outline-variant/30">
+<!-- Left: Brand / Breadcrumbs -->
+<div class="flex items-center gap-4">
+<span class="font-headline-md text-headline-md font-bold text-cyber-blue dark:text-cyber-blue tracking-tight">Perch</span>
+<!-- Divider -->
+<div class="h-6 w-px bg-outline-variant/50 hidden sm:block"></div>
+<!-- Breadcrumbs -->
+<nav class="hidden sm:flex items-center font-code-sm text-code-sm text-on-surface-variant gap-2">
+<a class="hover:text-cyber-blue transition-colors" href="#">Projects</a>
+<span class="material-symbols-outlined text-[14px]">chevron_right</span>
+<a class="hover:text-cyber-blue transition-colors" href="#">My Stack</a>
+<span class="material-symbols-outlined text-[14px]">chevron_right</span>
+<span class="text-cyber-blue font-bold">web</span>
+</nav>
+</div>
+<!-- Right: Actions -->
+<div class="flex items-center gap-4">
+<!-- Search Icon (Mobile/Compact) -->
+<button class="text-on-surface-variant hover:text-cyber-blue transition-colors">
+<span class="material-symbols-outlined">search</span>
+</button>
+<div class="flex items-center gap-2">
+<button class="p-2 rounded-full text-on-surface-variant hover:text-cyber-blue hover:bg-surface-variant/50 transition-colors">
+<span class="material-symbols-outlined" data-icon="medical_services">medical_services</span>
+</button>
+<button class="p-2 rounded-full text-on-surface-variant hover:text-cyber-blue hover:bg-surface-variant/50 transition-colors relative">
+<span class="material-symbols-outlined" data-icon="notifications">notifications</span>
+<span class="absolute top-2 right-2 w-2 h-2 bg-tertiary rounded-full"></span>
+</button>
+<button class="p-2 rounded-full text-on-surface-variant hover:text-cyber-blue hover:bg-surface-variant/50 transition-colors">
+<span class="material-symbols-outlined" data-icon="account_circle">account_circle</span>
+</button>
+</div>
+</div>
+</header>
+<!-- Page Content Canvas -->
+<main class="flex-1 overflow-y-auto p-4 md:p-margin flex flex-col gap-6">
+<!-- Header & Actions -->
+<div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+<div class="flex items-center gap-4">
+<div class="w-12 h-12 rounded-full bg-surface-container-high border border-outline-variant flex items-center justify-center relative shadow-[0_0_15px_rgba(56,189,248,0.15)]">
+<span class="material-symbols-outlined text-on-surface text-2xl">language</span>
+<!-- Health Ring (Pulse Green for healthy) -->
+<div class="absolute inset-0 rounded-full border-2 border-secondary animate-pulse" style="animation-duration: 3s;"></div>
+</div>
+<div>
+<h2 class="font-headline-lg text-headline-lg text-on-surface">web</h2>
+<p class="font-code-sm text-code-sm text-outline">Frontend Client Application</p>
+</div>
+</div>
+<!-- Action Buttons -->
+<div class="flex flex-wrap gap-2">
+<button class="px-4 py-2 bg-surface-container-high border border-outline-variant rounded hover:bg-surface-bright transition-colors font-code-sm text-code-sm text-on-surface flex items-center gap-2">
+<span class="material-symbols-outlined text-[16px]">pause</span> Pause
+                    </button>
+<button class="px-4 py-2 bg-surface-container-high border border-outline-variant rounded hover:bg-surface-bright transition-colors font-code-sm text-code-sm text-on-surface flex items-center gap-2">
+<span class="material-symbols-outlined text-[16px]">restart_alt</span> Restart
+                    </button>
+<button class="px-4 py-2 bg-surface-container-high border border-outline-variant rounded hover:bg-surface-bright transition-colors font-code-sm text-code-sm text-on-surface flex items-center gap-2">
+<span class="material-symbols-outlined text-[16px]">build</span> Rebuild
+                    </button>
+<button class="px-4 py-2 bg-error-container/20 border border-error/50 rounded hover:bg-error-container/40 transition-colors font-code-sm text-code-sm text-error flex items-center gap-2">
+<span class="material-symbols-outlined text-[16px]">delete</span> Destroy
+                    </button>
+</div>
+</div>
+<!-- Tabs -->
+<div class="flex gap-2 overflow-x-auto pb-2">
+<div class="inline-flex p-1 bg-surface-container-high rounded-full border border-outline-variant/30 shadow-inner">
+<button class="px-5 py-1.5 rounded-full bg-cyber-blue text-[#00354a] font-code-sm text-code-sm font-bold shadow-sm transition-all">Overview</button>
+<button class="px-5 py-1.5 rounded-full transparent font-code-sm text-code-sm text-on-surface-variant hover:text-on-surface hover:bg-surface-variant/50 transition-all">Config</button>
+<button class="px-5 py-1.5 rounded-full transparent font-code-sm text-code-sm text-on-surface-variant hover:text-on-surface hover:bg-surface-variant/50 transition-all">Bindings</button>
+<button class="px-5 py-1.5 rounded-full transparent font-code-sm text-code-sm text-on-surface-variant hover:text-on-surface hover:bg-surface-variant/50 transition-all">Logs</button>
+<button class="px-5 py-1.5 rounded-full transparent font-code-sm text-code-sm text-on-surface-variant hover:text-on-surface hover:bg-surface-variant/50 transition-all">Backups</button>
+</div>
+</div>
+<!-- Grid Layout for Content -->
+<div class="grid grid-cols-1 lg:grid-cols-3 gap-6 flex-1">
+<!-- Left/Main Column: Overview & Logs -->
+<div class="lg:col-span-2 flex flex-col gap-6">
+<!-- Top Row: Combined Header Bar -->
+<div class="glass-panel p-5 rounded-2xl flex flex-wrap md:flex-nowrap items-center justify-between gap-6 border-l-4 border-l-cyber-blue relative overflow-hidden">
+<div class="absolute -right-10 -top-10 w-40 h-40 bg-cyber-blue/5 rounded-full blur-3xl"></div>
+<!-- Status -->
+<div class="flex flex-col gap-1 flex-1 border-b md:border-b-0 md:border-r border-outline-variant/30 pb-4 md:pb-0">
+<span class="font-label-caps text-label-caps text-outline uppercase tracking-widest">Status</span>
+<div class="flex items-center gap-3 mt-1">
+<span class="relative flex h-3 w-3">
+<span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-secondary opacity-75"></span>
+<span class="relative inline-flex rounded-full h-3 w-3 bg-secondary"></span>
+</span>
+<span class="font-code-md text-code-md text-on-surface">Running</span>
+<span class="px-2 py-0.5 rounded-full bg-secondary-container/20 text-secondary font-code-sm text-[10px] border border-secondary/30">Healthy</span>
+</div>
+</div>
+<!-- Image -->
+<div class="flex flex-col gap-1 flex-1 border-b md:border-b-0 md:border-r border-outline-variant/30 pb-4 md:pb-0 pl-0 md:pl-4">
+<span class="font-label-caps text-label-caps text-outline uppercase tracking-widest">Image</span>
+<div class="flex items-center gap-2 mt-1">
+<span class="material-symbols-outlined text-cyber-blue text-[20px]">deployed_code</span>
+<span class="font-code-md text-code-md text-on-surface truncate">perch/stack-web:ab12</span>
+</div>
+</div>
+<!-- Config Hash -->
+<div class="flex flex-col gap-1 flex-1 pl-0 md:pl-4">
+<span class="font-label-caps text-label-caps text-outline uppercase tracking-widest">Config Hash</span>
+<div class="flex items-center gap-2 mt-1">
+<span class="material-symbols-outlined text-tertiary text-[20px]">tag</span>
+<span class="font-code-md text-code-md text-on-surface font-mono">e9f2a8c</span>
+</div>
+</div>
+</div>
+<!-- Resource Charts & Deploy History -->
+<div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+<!-- Resources (Bento style) -->
+<div class="glass-panel p-5 rounded-xl flex flex-col gap-5">
+<h3 class="font-label-caps text-label-caps text-on-surface uppercase border-b border-outline-variant/30 pb-3 flex items-center gap-2">
+<span class="material-symbols-outlined text-[16px] text-cyber-blue">monitoring</span> Telemetry
+                            </h3>
+<div class="flex flex-col gap-6">
+<!-- CPU -->
+<div>
+<div class="flex justify-between items-end mb-2">
+<span class="font-code-sm text-code-sm text-outline flex items-center gap-1"><span class="material-symbols-outlined text-[14px]">memory</span> CPU (cores)</span>
+<span class="font-code-md text-code-md text-on-surface font-bold">1.0 <span class="text-outline text-[12px] font-normal">/ 2.0</span></span>
+</div>
+<div class="h-16 w-full telemetry-grid rounded-lg relative overflow-hidden border border-outline-variant/20 bg-surface-container-lowest/50">
+<!-- Area Gradient SVG -->
+<svg class="absolute inset-0 h-full w-full" preserveaspectratio="none" viewbox="0 0 100 100">
+<defs>
+<lineargradient id="cpuGradient" x1="0" x2="0" y1="0" y2="1">
+<stop offset="0%" stop-color="#38bdf8" stop-opacity="0.4"></stop>
+<stop offset="100%" stop-color="#38bdf8" stop-opacity="0.0"></stop>
+</lineargradient>
+</defs>
+<polygon fill="url(#cpuGradient)" points="0,100 0,70 10,60 20,65 30,40 40,50 50,20 60,55 70,60 80,50 90,52 100,52 100,100"></polygon>
+<polyline fill="none" points="0,70 10,60 20,65 30,40 40,50 50,20 60,55 70,60 80,50 90,52 100,52" stroke="#38bdf8" stroke-width="2" vector-effect="non-scaling-stroke"></polyline>
+</svg>
+</div>
+</div>
+<!-- Memory -->
+<div>
+<div class="flex justify-between items-end mb-2">
+<span class="font-code-sm text-code-sm text-outline flex items-center gap-1"><span class="material-symbols-outlined text-[14px]">storage</span> Memory</span>
+<span class="font-code-md text-code-md text-on-surface font-bold">512m <span class="text-outline text-[12px] font-normal">/ 1Gi</span></span>
+</div>
+<div class="h-16 w-full telemetry-grid rounded-lg relative overflow-hidden border border-outline-variant/20 bg-surface-container-lowest/50">
+<!-- Area Gradient SVG -->
+<svg class="absolute inset-0 h-full w-full" preserveaspectratio="none" viewbox="0 0 100 100">
+<defs>
+<lineargradient id="memGradient" x1="0" x2="0" y1="0" y2="1">
+<stop offset="0%" stop-color="#ffc42f" stop-opacity="0.3"></stop>
+<stop offset="100%" stop-color="#ffc42f" stop-opacity="0.0"></stop>
+</lineargradient>
+</defs>
+<polygon fill="url(#memGradient)" points="0,100 0,60 20,58 40,62 60,55 80,50 100,52 100,100"></polygon>
+<polyline fill="none" points="0,60 20,58 40,62 60,55 80,50 100,52" stroke="#ffc42f" stroke-width="2" vector-effect="non-scaling-stroke"></polyline>
+</svg>
+</div>
+</div>
+</div>
+</div>
+<!-- Deploy History -->
+<div class="glass-panel p-5 rounded-xl flex flex-col gap-5">
+<h3 class="font-label-caps text-label-caps text-on-surface uppercase border-b border-outline-variant/30 pb-3 flex items-center gap-2">
+<span class="material-symbols-outlined text-[16px] text-tertiary">history</span> Recent Actions
+                            </h3>
+<div class="flex flex-col gap-4 relative before:absolute before:left-[11px] before:top-2 before:bottom-2 before:w-[2px] before:bg-outline-variant/30">
+<div class="flex gap-4 relative z-10 group">
+<div class="w-6 h-6 rounded-full bg-surface-container-high border-2 border-secondary flex items-center justify-center shrink-0 mt-0.5 group-hover:shadow-[0_0_8px_rgba(77,224,130,0.4)] transition-all">
+<span class="w-2 h-2 rounded-full bg-secondary"></span>
+</div>
+<div>
+<p class="font-code-sm text-code-sm text-on-surface font-medium">Applied perch.yaml</p>
+<p class="font-code-sm text-[11px] text-outline mt-1">2 mins ago by sysadmin</p>
+</div>
+</div>
+<div class="flex gap-4 relative z-10 group">
+<div class="w-6 h-6 rounded-full bg-surface-container-high border-2 border-outline-variant flex items-center justify-center shrink-0 mt-0.5 group-hover:border-cyber-blue transition-colors"></div>
+<div>
+<p class="font-code-sm text-code-sm text-on-surface-variant">Restarted service</p>
+<p class="font-code-sm text-[11px] text-outline mt-1">4 hours ago by automated-policy</p>
+</div>
+</div>
+<div class="flex gap-4 relative z-10 group">
+<div class="w-6 h-6 rounded-full bg-surface-container-high border-2 border-outline-variant flex items-center justify-center shrink-0 mt-0.5 group-hover:border-cyber-blue transition-colors"></div>
+<div>
+<p class="font-code-sm text-code-sm text-on-surface-variant">Scaled replicas to 3</p>
+<p class="font-code-sm text-[11px] text-outline mt-1">1 day ago by sysadmin</p>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- Log Pane (Bottom Terminal) -->
+<div class="glass-panel rounded-xl flex flex-col flex-1 min-h-[300px] border border-outline-variant/30 overflow-hidden shadow-xl">
+<div class="bg-[#0b121e] px-4 py-3 border-b border-outline-variant/20 flex justify-between items-center relative z-10">
+<div class="flex items-center gap-3">
+<div class="flex gap-1.5">
+<div class="w-3 h-3 rounded-full bg-error-container/80 border border-error/50"></div>
+<div class="w-3 h-3 rounded-full bg-tertiary/50 border border-tertiary/50"></div>
+<div class="w-3 h-3 rounded-full bg-secondary/50 border border-secondary/50"></div>
+</div>
+<span class="font-code-sm text-[11px] text-outline uppercase tracking-wider ml-2">Live Stream / web-pod-77d8</span>
+</div>
+<div class="flex gap-3">
+<button class="text-outline hover:text-cyber-blue transition-colors flex items-center gap-1 text-[12px] font-code-sm"><span class="material-symbols-outlined text-[16px]">filter_alt</span> Filter</button>
+<button class="text-outline hover:text-cyber-blue transition-colors flex items-center gap-1 text-[12px] font-code-sm"><span class="material-symbols-outlined text-[16px]">download</span> Export</button>
+</div>
+</div>
+<div class="relative flex-1 bg-[#050b14]">
+<!-- Scanlines Overlay -->
+<div class="absolute inset-0 terminal-scanlines z-10"></div>
+<div class="p-4 font-code-sm text-[12px] leading-relaxed text-on-surface-variant overflow-y-auto terminal-scroll h-full absolute inset-0 z-0" style="font-family: 'JetBrains Mono', monospace;">
+<div class="flex gap-3 hover:bg-white/5 px-2 rounded py-0.5 transition-colors">
+<span class="text-outline/70 shrink-0 select-none">14:22:01.045</span>
+<span class="text-cyber-blue shrink-0 font-bold select-none">[INFO]</span>
+<span class="break-all text-on-surface/90">Starting web server on port 8080...</span>
+</div>
+<div class="flex gap-3 hover:bg-white/5 px-2 rounded py-0.5 transition-colors">
+<span class="text-outline/70 shrink-0 select-none">14:22:01.120</span>
+<span class="text-cyber-blue shrink-0 font-bold select-none">[INFO]</span>
+<span class="break-all text-on-surface/90">Connecting to cache backend (redis-svc:6379)...</span>
+</div>
+<div class="flex gap-3 hover:bg-white/5 px-2 rounded py-0.5 transition-colors">
+<span class="text-outline/70 shrink-0 select-none">14:22:01.550</span>
+<span class="text-cyber-blue shrink-0 font-bold select-none">[INFO]</span>
+<span class="break-all text-on-surface/90">Cache connected successfully.</span>
+</div>
+<div class="flex gap-3 hover:bg-white/5 px-2 rounded py-0.5 transition-colors">
+<span class="text-outline/70 shrink-0 select-none">14:22:02.001</span>
+<span class="text-secondary shrink-0 font-bold select-none">[OK]  </span>
+<span class="break-all text-secondary">Service ready to accept connections.</span>
+</div>
+<div class="flex gap-3 hover:bg-white/5 px-2 rounded py-0.5 mt-2 transition-colors">
+<span class="text-outline/70 shrink-0 select-none">14:25:10.880</span>
+<span class="text-cyber-blue shrink-0 font-bold select-none">[INFO]</span>
+<span class="break-all text-on-surface-variant">GET /api/v1/health 200 12ms</span>
+</div>
+<div class="flex gap-3 hover:bg-white/5 px-2 rounded py-0.5 transition-colors">
+<span class="text-outline/70 shrink-0 select-none">14:25:15.230</span>
+<span class="text-cyber-blue shrink-0 font-bold select-none">[INFO]</span>
+<span class="break-all text-on-surface-variant">GET /api/v1/metrics 200 45ms</span>
+</div>
+<div class="flex gap-3 bg-tertiary/10 border-l-2 border-tertiary px-2 rounded py-0.5 mt-1 mb-1 transition-colors">
+<span class="text-outline/70 shrink-0 select-none">14:26:00.005</span>
+<span class="text-tertiary shrink-0 font-bold select-none">[WARN]</span>
+<span class="break-all text-tertiary">Slow query detected on endpoint /api/v1/users (850ms).</span>
+</div>
+<div class="flex gap-3 hover:bg-white/5 px-2 rounded py-0.5 mt-1 transition-colors">
+<span class="text-outline/70 shrink-0 select-none">14:26:10.880</span>
+<span class="text-cyber-blue shrink-0 font-bold select-none">[INFO]</span>
+<span class="break-all text-on-surface-variant">GET /api/v1/health 200 11ms</span>
+</div>
+<div class="flex gap-3 hover:bg-white/5 px-2 rounded py-0.5 transition-colors">
+<span class="text-outline/70 shrink-0 select-none">14:27:10.880</span>
+<span class="text-cyber-blue shrink-0 font-bold select-none">[INFO]</span>
+<span class="break-all text-on-surface-variant">GET /api/v1/health 200 13ms</span>
+</div>
+<!-- Blinking cursor -->
+<div class="flex gap-3 px-2 rounded py-0.5 mt-1">
+<span class="w-2 h-4 bg-cyber-blue animate-pulse mt-0.5"></span>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- Right Column: Config Sidecar -->
+<div class="lg:col-span-1">
+<div class="glass-panel rounded-xl h-full flex flex-col border border-outline-variant/30 overflow-hidden">
+<div class="px-4 py-3 bg-[#0b121e] border-b border-outline-variant/20 flex justify-between items-center">
+<h3 class="font-label-caps text-label-caps text-on-surface uppercase flex items-center gap-2 tracking-wider">
+<span class="material-symbols-outlined text-[16px] text-cyber-blue">data_object</span> perch.yaml snippet
+                            </h3>
+<button class="p-1.5 rounded bg-surface-variant/30 text-outline hover:text-cyber-blue hover:bg-surface-variant/50 transition-colors" title="Copy to clipboard"><span class="material-symbols-outlined text-[14px]">content_copy</span></button>
+</div>
+<div class="p-5 overflow-x-auto bg-[#050b14] flex-1 font-code-sm text-[13px] leading-[1.7] whitespace-pre terminal-scroll">
+<span class="sh-key">name</span>: <span class="sh-string">web</span>
+<span class="sh-key">type</span>: <span class="sh-string">frontend</span>
+<span class="sh-key">image</span>: <span class="sh-string">perch/stack-web:ab12</span>
+<span class="sh-key">resources</span>:
+  <span class="sh-key">cpu</span>:
+    <span class="sh-key">request</span>: <span class="sh-string">1.0</span>
+<span class="sh-key">limit</span>: <span class="sh-string">2.0</span>
+<span class="sh-key">memory</span>:
+    <span class="sh-key">request</span>: <span class="sh-string">512m</span>
+<span class="sh-key">limit</span>: <span class="sh-string">1Gi</span>
+<span class="sh-key">ports</span>:
+  - <span class="sh-key">port</span>: <span class="sh-string">8080</span>
+<span class="sh-key">targetPort</span>: <span class="sh-string">8080</span>
+<span class="sh-key">protocol</span>: <span class="sh-string">TCP</span>
+<span class="sh-key">env</span>:
+  - <span class="sh-key">name</span>: <span class="sh-string">NODE_ENV</span>
+<span class="sh-key">value</span>: <span class="sh-string">production</span>
+  - <span class="sh-key">name</span>: <span class="sh-string">CACHE_URL</span>
+<span class="sh-key">value</span>: <span class="sh-string">redis://redis-svc:6379</span>
+<span class="sh-comment"># Health check configuration</span>
+<span class="sh-key">livenessProbe</span>:
+  <span class="sh-key">httpGet</span>:
+    <span class="sh-key">path</span>: <span class="sh-string">/api/v1/health</span>
+<span class="sh-key">port</span>: <span class="sh-string">8080</span>
+<span class="sh-key">initialDelaySeconds</span>: <span class="sh-string">15</span></div>
+</div>
+</div>
+</div>
+</main>
+</div>
+</body></html>

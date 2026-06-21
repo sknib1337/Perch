@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Perch - Drift &amp; Audit</title>
+<!-- Tailwind CSS -->
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<!-- Material Symbols -->
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<!-- Fonts: Inter and JetBrains Mono -->
+<link href="https://fonts.googleapis.com" rel="preconnect"/>
+<link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&amp;family=JetBrains+Mono:wght@400;500;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<!-- Tailwind Config -->
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "on-primary": "#00354a",
+                        "on-secondary": "#003919",
+                        "primary-fixed-dim": "#7bd0ff",
+                        "on-primary-fixed-variant": "#004c69",
+                        "primary-container": "#38bdf8",
+                        "on-surface-variant": "#bdc8d1",
+                        "surface": "#0b1326",
+                        "on-primary-container": "#004965",
+                        "on-surface": "#dae2fd",
+                        "background": "#0b1326",
+                        "surface-container-highest": "#2d3449",
+                        "tertiary": "#ffc42f",
+                        "on-tertiary": "#402d00",
+                        "secondary-fixed-dim": "#4de082",
+                        "surface-container-high": "#222a3d",
+                        "on-secondary-container": "#003e1c",
+                        "surface-tint": "#7bd0ff",
+                        "surface-container-low": "#131b2e",
+                        "primary-fixed": "#c4e7ff",
+                        "surface-variant": "#2d3449",
+                        "error-container": "#93000a",
+                        "tertiary-fixed": "#ffdf9f",
+                        "surface-dim": "#0b1326",
+                        "inverse-primary": "#00668a",
+                        "primary": "#8ed5ff",
+                        "tertiary-fixed-dim": "#f9bd22",
+                        "secondary-container": "#00b55d",
+                        "surface-container": "#171f33",
+                        "inverse-surface": "#dae2fd",
+                        "outline-variant": "#3e484f",
+                        "outline": "#87929a",
+                        "tertiary-container": "#e1a800",
+                        "on-tertiary-fixed-variant": "#5c4300",
+                        "secondary-fixed": "#6dfe9c",
+                        "on-secondary-fixed": "#00210c",
+                        "on-secondary-fixed-variant": "#005227",
+                        "surface-container-lowest": "#060e20",
+                        "surface-bright": "#31394d",
+                        "on-tertiary-fixed": "#261a00",
+                        "secondary": "#4de082",
+                        "on-tertiary-container": "#584000",
+                        "error": "#ffb4ab",
+                        "on-primary-fixed": "#001e2c",
+                        "inverse-on-surface": "#283044",
+                        "on-error": "#690005",
+                        "on-error-container": "#ffdad6",
+                        "on-background": "#dae2fd"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.125rem",
+                        "lg": "0.25rem",
+                        "xl": "0.5rem",
+                        "full": "0.75rem"
+                    },
+                    "spacing": {
+                        "panel-padding": "20px",
+                        "gutter": "16px",
+                        "margin": "24px",
+                        "unit": "4px"
+                    },
+                    "fontFamily": {
+                        "body-sm": ["Inter", "sans-serif"],
+                        "code-sm": ["JetBrains Mono", "monospace"],
+                        "label-caps": ["JetBrains Mono", "monospace"],
+                        "code-md": ["JetBrains Mono", "monospace"],
+                        "headline-md": ["Inter", "sans-serif"],
+                        "body-md": ["Inter", "sans-serif"],
+                        "headline-lg": ["Inter", "sans-serif"]
+                    },
+                    "fontSize": {
+                        "body-sm": ["14px", { "lineHeight": "20px", "fontWeight": "400" }],
+                        "code-sm": ["12px", { "lineHeight": "16px", "fontWeight": "500" }],
+                        "label-caps": ["11px", { "lineHeight": "16px", "letterSpacing": "0.05em", "fontWeight": "700" }],
+                        "code-md": ["14px", { "lineHeight": "20px", "fontWeight": "400" }],
+                        "headline-md": ["24px", { "lineHeight": "32px", "letterSpacing": "-0.01em", "fontWeight": "600" }],
+                        "body-md": ["16px", { "lineHeight": "24px", "fontWeight": "400" }],
+                        "headline-lg": ["32px", { "lineHeight": "40px", "letterSpacing": "-0.02em", "fontWeight": "600" }]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .fill-icon {
+            font-variation-settings: 'FILL' 1;
+        }
+    </style>
+</head>
+<body class="bg-surface text-on-surface font-body-md antialiased overflow-x-hidden min-h-screen flex selection:bg-primary/30 selection:text-primary">
+<!-- SideNavBar (from JSON) -->
+<aside class="fixed left-0 top-0 h-screen w-60 flex flex-col py-panel-padding z-40 bg-surface-container-low/90 dark:bg-surface-container-low/90 backdrop-blur-xl border-r border-outline-variant/20 hidden md:flex">
+<!-- Header -->
+<div class="px-gutter mb-8 flex flex-col gap-1">
+<div class="flex items-center gap-3">
+<div class="w-8 h-8 rounded-full bg-surface-bright flex items-center justify-center border border-outline-variant/50 relative overflow-hidden">
+<img class="w-full h-full object-cover" data-alt="A small, stylized, high-tech glowing geometric avatar representing a centralized AI system command entity." src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw=="/>
+</div>
+<div>
+<h2 class="font-label-caps text-label-caps uppercase tracking-widest text-primary truncate w-full">Command Sidebar</h2>
+<p class="font-code-sm text-code-sm text-on-surface-variant opacity-70">v2.4.0-stable</p>
+</div>
+</div>
+</div>
+<!-- Navigation Links -->
+<nav class="flex-1 flex flex-col gap-1 px-2">
+<!-- Topology -->
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-on-surface-variant hover:bg-surface-variant/30 hover:bg-surface-container-high transition-all duration-150 group" href="#">
+<span class="material-symbols-outlined text-[20px] group-hover:text-secondary transition-colors">hub</span>
+<span class="font-body-sm text-body-sm">Topology</span>
+</a>
+<!-- Services -->
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-on-surface-variant hover:bg-surface-variant/30 hover:bg-surface-container-high transition-all duration-150 group" href="#">
+<span class="material-symbols-outlined text-[20px] group-hover:text-secondary transition-colors">layers</span>
+<span class="font-body-sm text-body-sm">Services</span>
+</a>
+<!-- Deploy -->
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-on-surface-variant hover:bg-surface-variant/30 hover:bg-surface-container-high transition-all duration-150 group" href="#">
+<span class="material-symbols-outlined text-[20px] group-hover:text-secondary transition-colors">rocket_launch</span>
+<span class="font-body-sm text-body-sm">Deploy</span>
+</a>
+<!-- Drift/Audit (ACTIVE) -->
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg bg-secondary-container/20 text-secondary border-r-2 border-secondary font-bold scale-[0.98] transition-all duration-150" href="#">
+<span class="material-symbols-outlined text-[20px] fill-icon text-secondary">security_update_warning</span>
+<span class="font-body-sm text-body-sm">Drift/Audit</span>
+</a>
+<!-- Backups -->
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-on-surface-variant hover:bg-surface-variant/30 hover:bg-surface-container-high transition-all duration-150 group" href="#">
+<span class="material-symbols-outlined text-[20px] group-hover:text-secondary transition-colors">settings_backup_restore</span>
+<span class="font-body-sm text-body-sm">Backups</span>
+</a>
+<!-- Manifest -->
+<a class="flex items-center gap-3 px-3 py-2 rounded-lg text-on-surface-variant hover:bg-surface-variant/30 hover:bg-surface-container-high transition-all duration-150 group" href="#">
+<span class="material-symbols-outlined text-[20px] group-hover:text-secondary transition-colors">description</span>
+<span class="font-body-sm text-body-sm">Manifest</span>
+</a>
+</nav>
+</aside>
+<!-- Main Content Area -->
+<main class="flex-1 flex flex-col min-w-0 md:ml-60 relative">
+<!-- TopNavBar (from JSON) -->
+<header class="flex justify-between items-center w-full px-gutter h-16 sticky top-0 z-50 bg-surface/80 dark:bg-surface/80 backdrop-blur-md border-b border-outline-variant/30">
+<!-- Brand -->
+<div class="flex items-center gap-2">
+<h1 class="font-headline-md text-headline-md font-bold text-primary dark:text-primary">Perch</h1>
+</div>
+<!-- Actions -->
+<div class="flex items-center gap-4">
+<button class="text-on-surface-variant hover:text-primary transition-colors focus:outline-none">
+<span class="material-symbols-outlined text-[24px]">medical_services</span>
+</button>
+<button class="text-on-surface-variant hover:text-primary transition-colors focus:outline-none relative">
+<span class="material-symbols-outlined text-[24px]">notifications</span>
+<span class="absolute top-0 right-0 w-2 h-2 bg-tertiary rounded-full animate-pulse"></span>
+</button>
+<button class="text-on-surface-variant hover:text-primary transition-colors focus:outline-none">
+<span class="material-symbols-outlined text-[24px]">account_circle</span>
+</button>
+</div>
+</header>
+<!-- Page Canvas -->
+<div class="flex-1 p-margin flex flex-col gap-margin max-w-6xl mx-auto w-full">
+<!-- Header Section -->
+<div class="flex flex-col md:flex-row md:items-end justify-between gap-4">
+<div>
+<h1 class="font-headline-lg text-headline-lg text-on-surface tracking-tight">Drift &amp; Audit: My Stack</h1>
+<p class="font-body-md text-body-md text-on-surface-variant mt-2">Real-time infrastructure compliance and health telemetry.</p>
+</div>
+<div class="flex items-center gap-2 text-on-surface-variant bg-surface-container-low px-3 py-1.5 rounded border border-outline-variant/30">
+<span class="material-symbols-outlined text-[16px] animate-spin" style="animation-duration: 3s;">sync</span>
+<span class="font-code-sm text-code-sm">Live Stream Active</span>
+</div>
+</div>
+<!-- Dramatic Overview Counter & Posture Score -->
+<div class="grid grid-cols-1 md:grid-cols-3 gap-margin">
+<div class="md:col-span-2 bg-surface-container-high border border-outline-variant/30 rounded-2xl p-8 flex items-center justify-between relative overflow-hidden group">
+<!-- Dramatic background glow -->
+<div class="absolute -left-20 -top-20 w-80 h-80 bg-error/10 rounded-full blur-[80px] group-hover:bg-error/20 transition-colors duration-700"></div>
+<div class="relative z-10 flex flex-col gap-2">
+<h3 class="font-label-caps text-label-caps text-on-surface-variant uppercase tracking-widest">System Attention Required</h3>
+<div class="flex items-baseline gap-4">
+<span class="text-[80px] leading-none font-bold text-error font-code-md tracking-tighter drop-shadow-[0_0_15px_rgba(255,180,171,0.4)]">3</span>
+<span class="font-headline-md text-headline-md text-on-surface opacity-90">Active Findings</span>
+</div>
+<p class="font-body-sm text-body-sm text-on-surface-variant max-w-sm mt-1">Critical anomalies detected in your infrastructure stack. Immediate resolution recommended.</p>
+</div>
+<div class="relative z-10 hidden sm:block">
+<!-- Posture Score Circular Gauge -->
+<div class="relative w-36 h-36 flex items-center justify-center">
+<svg class="w-full h-full transform -rotate-90" viewbox="0 0 100 100">
+<circle class="text-surface-container-highest stroke-current" cx="50" cy="50" fill="transparent" r="40" stroke-width="8"></circle>
+<circle class="text-tertiary stroke-current drop-shadow-[0_0_10px_rgba(255,196,47,0.6)]" cx="50" cy="50" fill="transparent" r="40" stroke-dasharray="251.2" stroke-dashoffset="62.8" stroke-linecap="round" stroke-width="8"></circle>
+</svg>
+<div class="absolute inset-0 flex flex-col items-center justify-center">
+<span class="text-3xl font-bold font-code-md text-tertiary">75</span>
+<span class="text-[10px] uppercase font-label-caps text-on-surface-variant tracking-wider mt-1">Score</span>
+</div>
+</div>
+</div>
+</div>
+<div class="bg-surface-container-high border border-outline-variant/30 rounded-2xl p-6 flex flex-col justify-center relative overflow-hidden">
+<div class="absolute -right-16 -bottom-16 w-48 h-48 bg-primary/5 rounded-full blur-3xl"></div>
+<h3 class="font-label-caps text-label-caps text-on-surface-variant uppercase tracking-widest mb-4 z-10">Scan Telemetry</h3>
+<div class="flex items-center gap-3 z-10 mb-3">
+<span class="relative flex h-3 w-3">
+<span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-secondary opacity-75"></span>
+<span class="relative inline-flex rounded-full h-3 w-3 bg-secondary"></span>
+</span>
+<span class="font-code-sm text-code-sm text-on-surface font-semibold">Continuous Monitoring</span>
+</div>
+<p class="font-body-sm text-body-sm text-on-surface-variant z-10">Last full environment sweep completed 2m ago. Real-time hooks active.</p>
+</div>
+</div>
+<!-- Finding Strips Section -->
+<div class="flex flex-col gap-4 mt-2">
+<div class="flex items-center justify-between mb-2">
+<h3 class="font-headline-md text-headline-md text-on-surface">Actionable Events</h3>
+<div class="flex gap-2">
+<button class="px-3 py-1.5 bg-surface-container-low border border-outline-variant/50 rounded text-on-surface font-body-sm text-body-sm hover:bg-surface-container-high transition-colors flex items-center gap-2">
+<span class="material-symbols-outlined text-[18px]">filter_list</span> Filter
+                    </button>
+</div>
+</div>
+<!-- Strip Grid -->
+<div class="flex flex-col gap-3">
+<!-- Finding Strip 1: UNHEALTHY -->
+<div class="bg-surface-container-low/80 backdrop-blur-sm border border-outline-variant/30 rounded-xl p-5 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 relative overflow-hidden group hover:-translate-y-1 hover:shadow-[0_8px_30px_rgba(0,0,0,0.2)] hover:border-error/40 transition-all duration-300">
+<!-- Status Ribbon -->
+<div class="absolute left-0 top-0 bottom-0 w-1.5 bg-error"></div>
+<!-- Content Left -->
+<div class="flex flex-col md:flex-row items-start md:items-center gap-6 flex-1 w-full pl-3">
+<div class="w-32 flex-shrink-0">
+<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded bg-error-container/20 border border-error/20 text-error font-code-sm text-code-sm font-semibold">
+<span class="w-1.5 h-1.5 rounded-full bg-error animate-pulse"></span>
+                                UNHEALTHY
+                            </span>
+</div>
+<div class="flex flex-col gap-1.5 flex-1 min-w-0">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-on-surface-variant text-[18px]">dns</span>
+<span class="font-code-md text-code-md text-on-surface font-semibold">web-ingress-01</span>
+</div>
+<div class="font-code-sm text-code-sm text-on-surface-variant bg-surface-dim/50 px-2.5 py-1 rounded border border-outline-variant/10 font-mono truncate max-w-2xl">
+                                failing healthcheck: timeout after 5000ms
+                            </div>
+</div>
+</div>
+<!-- Action Right -->
+<div class="flex-shrink-0 w-full md:w-auto flex justify-end mt-2 md:mt-0">
+<button class="w-full md:w-auto px-6 py-2 bg-error/10 hover:bg-error/20 border border-error/30 rounded-lg text-error font-code-sm text-code-sm font-semibold transition-colors flex items-center justify-center gap-2 shadow-[0_0_15px_rgba(255,180,171,0.1)] hover:shadow-[0_0_20px_rgba(255,180,171,0.2)]">
+<span class="material-symbols-outlined text-[18px]">troubleshoot</span> Investigate
+                        </button>
+</div>
+</div>
+<!-- Finding Strip 2: DRIFT -->
+<div class="bg-surface-container-low/80 backdrop-blur-sm border border-outline-variant/30 rounded-xl p-5 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 relative overflow-hidden group hover:-translate-y-1 hover:shadow-[0_8px_30px_rgba(0,0,0,0.2)] hover:border-tertiary/40 transition-all duration-300">
+<!-- Status Ribbon -->
+<div class="absolute left-0 top-0 bottom-0 w-1.5 bg-tertiary"></div>
+<!-- Content Left -->
+<div class="flex flex-col md:flex-row items-start md:items-center gap-6 flex-1 w-full pl-3">
+<div class="w-32 flex-shrink-0">
+<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded bg-tertiary-container/20 border border-tertiary/20 text-tertiary font-code-sm text-code-sm font-semibold">
+<span class="w-1.5 h-1.5 rounded-full bg-tertiary"></span>
+                                DRIFT
+                            </span>
+</div>
+<div class="flex flex-col gap-1.5 flex-1 min-w-0">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-on-surface-variant text-[18px]">database</span>
+<span class="font-code-md text-code-md text-on-surface font-semibold">db-cluster-main</span>
+</div>
+<div class="font-code-sm text-code-sm text-on-surface-variant bg-surface-dim/50 px-2.5 py-1 rounded border border-outline-variant/10 font-mono truncate max-w-2xl">
+                                live config != manifest: 'max_connections' delta
+                            </div>
+</div>
+</div>
+<!-- Action Right -->
+<div class="flex-shrink-0 w-full md:w-auto flex justify-end mt-2 md:mt-0">
+<button class="w-full md:w-auto px-6 py-2 bg-tertiary/10 hover:bg-tertiary/20 border border-tertiary/30 rounded-lg text-tertiary font-code-sm text-code-sm font-semibold transition-colors flex items-center justify-center gap-2 shadow-[0_0_15px_rgba(255,196,47,0.05)] hover:shadow-[0_0_20px_rgba(255,196,47,0.15)]">
+<span class="material-symbols-outlined text-[18px]">sync_alt</span> Sync
+                        </button>
+</div>
+</div>
+<!-- Finding Strip 3: MISSING -->
+<div class="bg-surface-container-low/80 backdrop-blur-sm border border-outline-variant/30 rounded-xl p-5 flex flex-col md:flex-row items-start md:items-center justify-between gap-4 relative overflow-hidden group hover:-translate-y-1 hover:shadow-[0_8px_30px_rgba(0,0,0,0.2)] hover:border-outline/50 transition-all duration-300 opacity-90 hover:opacity-100">
+<!-- Status Ribbon -->
+<div class="absolute left-0 top-0 bottom-0 w-1.5 bg-outline"></div>
+<!-- Content Left -->
+<div class="flex flex-col md:flex-row items-start md:items-center gap-6 flex-1 w-full pl-3">
+<div class="w-32 flex-shrink-0">
+<span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded bg-surface-variant/50 border border-outline-variant/50 text-on-surface-variant font-code-sm text-code-sm font-semibold">
+<span class="w-1.5 h-1.5 rounded-full bg-outline"></span>
+                                MISSING
+                            </span>
+</div>
+<div class="flex flex-col gap-1.5 flex-1 min-w-0 opacity-80 group-hover:opacity-100 transition-opacity">
+<div class="flex items-center gap-2">
+<span class="material-symbols-outlined text-on-surface-variant text-[18px]">inventory_2</span>
+<span class="font-code-md text-code-md text-on-surface font-semibold">static-assets-cdn</span>
+</div>
+<div class="font-code-sm text-code-sm text-on-surface-variant bg-surface-dim/50 px-2.5 py-1 rounded border border-outline-variant/10 font-mono truncate max-w-2xl">
+                                declared in manifest, not found in cluster
+                            </div>
+</div>
+</div>
+<!-- Action Right -->
+<div class="flex-shrink-0 w-full md:w-auto flex justify-end mt-2 md:mt-0">
+<button class="w-full md:w-auto px-6 py-2 bg-primary/10 hover:bg-primary/20 border border-primary/30 rounded-lg text-primary font-code-sm text-code-sm font-semibold transition-colors flex items-center justify-center gap-2 shadow-[0_0_15px_rgba(142,213,255,0.05)] hover:shadow-[0_0_20px_rgba(142,213,255,0.15)]">
+<span class="material-symbols-outlined text-[18px]">cloud_upload</span> Deploy
+                        </button>
+</div>
+</div>
+</div>
+</div>
+</div>
+</main>
+</body></html>

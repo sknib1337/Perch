@@ -1,0 +1,74 @@
+# perch.yaml -- declarative manifest for all hosted workloads.
+#
+# Perch reconciles the host's running containers to match this file. Define
+# applications, agents, functions, and managed backend services here, then run
+# `perch up`. Workloads run as hardened containers with routing, health checks,
+# scheduling, bindings, and drift detection.
+#
+# Secrets are ${ENV_VAR} references resolved at apply time and never stored here.
+# Managed-service credentials are generated once and kept in .perch/state.json
+# (git-ignored) -- not in this file.
+
+project: my-stack
+
+defaults:
+  restart: unless-stopped
+  resources: { memory: 512m, cpus: "1.0" }
+
+prune: false        # true: remove managed containers not present in this file
+
+services:
+  # --- managed backend services (the "tree" workloads perch on) --------
+  - name: db
+    type: postgres                  # pgvector/pgvector image; vector-ready
+    version: "16"
+    extensions: [pgvector]
+    backup:
+      schedule: "0 2 * * *"         # nightly dump (requires `perch scheduler`)
+      retain: 7
+
+  # - name: cache
+  #   type: cache                   # Redis with append-only persistence
+  #
+  # - name: store
+  #   type: storage                 # MinIO (S3-compatible)
+  #   buckets: [uploads, exports]
+  #
+  # - name: api
+  #   type: rest-api                # PostgREST auto-API over `db`
+  #   database: db
+  #
+  # - name: identity
+  #   type: auth                    # Zitadel: OIDC/OAuth, users, sessions
+  #   database: db
+
+  # --- application workload --------------------------------------------
+  - name: web
+    type: webapp
+    build:
+      context: ./examples/hello-web
+    port: 8080
+    route:
+      host: web.localhost
+    health:
+      path: /
+    bindings: [db]                  # injects DATABASE_URL / PG* env automatically
+    env:
+      - { key: GREETING, value: "hello from perch" }
+
+  # --- function workload (builds + runs user code) ---------------------
+  # - name: webhook
+  #   type: function
+  #   runtime: python312
+  #   build: { context: ./functions/webhook }
+  #   port: 8080
+  #   bindings: [db]
+
+  # --- agent workload (long-lived or scheduled) ------------------------
+  # - name: report-agent
+  #   type: agent
+  #   build: { context: https://github.com/sknib1337/report-agent }
+  #   schedule: "0 */6 * * *"       # omit for a continuous worker
+  #   bindings: [db]
+  #   env:
+  #     - { key: ANTHROPIC_API_KEY, value: "${ANTHROPIC_API_KEY}", secret: true }
