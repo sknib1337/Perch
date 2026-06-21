@@ -52,11 +52,42 @@ class DockerBackend:
 
     # ---- network --------------------------------------------------------
     def ensure_network(self, project: str) -> str:
-        net = f"perch-{project}"
+        """Create the project's main bridge network and an `--internal` network
+        (no route off-box) used for egress-restricted workloads (C8)."""
+        from . import egress
         existing = _docker("network", "ls", "--format", "{{.Name}}").stdout.split()
-        if net not in existing:
-            _docker("network", "create", net)
-        return net
+        main = egress.main_network(project)
+        internal = egress.internal_network(project)
+        if main not in existing:
+            _docker("network", "create", main)
+        if internal not in existing:
+            _docker("network", "create", "--internal", internal)
+        return main
+
+    def ensure_egress_proxy(self, project: str, service: str, allow_hosts: list[str]) -> None:
+        """Run a per-workload default-deny forward proxy that only forwards the
+        allowlisted hosts (C8), attached to the internal net (for the workload)
+        and the main net (for the internet)."""
+        from . import egress
+        cname = egress.proxy_name(project, service)
+        d = Path(tempfile.mkdtemp(prefix="perch-egress-"))
+        (d / "tinyproxy.conf").write_text(egress.tinyproxy_config())
+        (d / "filter").write_text(egress.tinyproxy_filter(allow_hosts))
+        _docker("rm", "-f", cname, check=False)
+        _docker("run", "-d", "--name", cname,
+                "--network", egress.internal_network(project),
+                "--label", self.label_managed,
+                "--label", f"perch.project={project}",
+                "--label", f"perch.service=egress-{service}",
+                "--restart", "unless-stopped",
+                # The proxy must not act as an IP router between its two nets;
+                # enforce the Docker default explicitly so the only egress path
+                # is the filtered HTTP(S) proxy itself.
+                "--sysctl", "net.ipv4.ip_forward=0",
+                "-v", f"{d / 'tinyproxy.conf'}:/etc/tinyproxy/tinyproxy.conf:ro",
+                "-v", f"{d / 'filter'}:/etc/tinyproxy/filter:ro",
+                "vimagick/tinyproxy", check=False, capture=False)
+        _docker("network", "connect", egress.main_network(project), cname, check=False)
 
     # ---- introspection --------------------------------------------------
     def list_managed(self, project: str) -> list[LiveService]:
@@ -112,16 +143,36 @@ class DockerBackend:
     # ---- converge (build + recreate) -----------------------------------
     def converge(self, svc: Service, ctx: RenderContext) -> None:
         cname = self._cname(ctx.project, svc.name)
+        tmp: list[str] = []
         if ctx.spec is not None:                      # managed service: run catalog image
             image = ctx.spec.image
             _docker("pull", image, check=False, capture=False)
             _docker("rm", "-f", cname, check=False)
-            _docker("run", "-d", *self._run_args(svc, ctx, cname, image), capture=True)
+            try:
+                _docker("run", "-d", *self._run_args(svc, ctx, cname, image, cleanup=tmp), capture=True)
+            finally:
+                _cleanup(tmp)
+            self._attach_networks(cname, ctx)
             self._provision_managed(svc, ctx)
             return
         image = svc.image or self._build(svc, ctx)    # app/agent: build or prebuilt
         _docker("rm", "-f", cname, check=False)
-        _docker("run", "-d", *self._run_args(svc, ctx, cname, image), capture=True)
+        try:
+            _docker("run", "-d", *self._run_args(svc, ctx, cname, image, cleanup=tmp), capture=True)
+        finally:
+            _cleanup(tmp)
+        self._attach_networks(cname, ctx)
+
+    def _attach_networks(self, cname: str, ctx: RenderContext) -> None:
+        for net in ctx.extra_networks:            # C8: managed svcs on both nets
+            _docker("network", "connect", net, cname, check=False)
+
+    def attach_internal(self, project: str, name: str) -> None:
+        """Idempotently put a managed service on the internal network (covers a
+        container that pre-dates C8 and wasn't re-converged on upgrade)."""
+        from . import egress
+        _docker("network", "connect", egress.internal_network(project),
+                self._cname(project, name), check=False)
 
     def exec(self, project: str, name: str, cmd: list[str]) -> int:
         return _docker("exec", self._cname(project, name), *cmd,
@@ -180,9 +231,13 @@ class DockerBackend:
         image = svc.image or self._build(svc, ctx)
         cname = f"{self._cname(ctx.project, svc.name)}-job"
         _docker("rm", "-f", cname, check=False)
-        args = self._run_args(svc, ctx, cname, image, restart=False)
-        r = _docker("run", "--rm", *[a for a in args if not a.startswith("--restart")],
-                    check=False, capture=False)
+        tmp: list[str] = []
+        args = self._run_args(svc, ctx, cname, image, restart=False, cleanup=tmp)
+        try:
+            r = _docker("run", "--rm", *[a for a in args if not a.startswith("--restart")],
+                        check=False, capture=False)
+        finally:
+            _cleanup(tmp)
         return r.returncode
 
     def _build(self, svc: Service, ctx: RenderContext) -> str:
@@ -199,7 +254,8 @@ class DockerBackend:
         return image
 
     def _run_args(self, svc: Service, ctx: RenderContext, cname: str,
-                  image: str, restart: bool = True) -> list[str]:
+                  image: str, restart: bool = True,
+                  cleanup: list[str] | None = None) -> list[str]:
         spec = ctx.spec
         sec = spec.security if spec else svc.security
         args = [
@@ -234,10 +290,15 @@ class DockerBackend:
             args += ["--label", f"perch.port={port}"]
         if svc.route.host:
             args += ["--label", f"perch.route_host={svc.route.host}"]
-        # env: managed spec env (credentials) + bindings/user env, via 0600 env-file
+        # env: managed spec env (credentials) + bindings/user env, via 0600 env-file.
+        # The host temp file is deleted right after `docker run` reads it (see
+        # converge/run_once) so credentials/tickets don't linger on disk.
         env = (spec.env if spec else []) + ctx.env
         if env:
-            args += ["--env-file", _write_envfile(env)]
+            envfile = _write_envfile(env)
+            if cleanup is not None:
+                cleanup.append(envfile)
+            args += ["--env-file", envfile]
         # healthcheck: managed spec command, or an HTTP probe for apps
         health = spec.health_cmd if spec else None
         if health:
@@ -278,3 +339,12 @@ def _write_envfile(env: list[tuple[str, str]]) -> str:
         for k, v in env:
             f.write(f"{k}={v}\n")
     return path
+
+
+def _cleanup(paths: list[str]) -> None:
+    """Remove temp env-files once `docker run` has consumed them (best effort)."""
+    for p in paths:
+        try:
+            os.unlink(p)
+        except OSError:
+            pass

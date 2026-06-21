@@ -92,6 +92,15 @@ def _postgres(svc: Service, project: str, state: State) -> ManagedSpec:
         ("POSTGRES_DB", "app"),
         ("PGDATA", "/var/lib/postgresql/data/pgdata"),
     ]
+    # Strip the ambient PUBLIC EXECUTE grant so a least-privilege per-run role (C6)
+    # can't call functions it was never granted; the owning `app` role is
+    # unaffected. Idempotent, so it's safe to re-run on every converge.
+    init = [
+        "REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM PUBLIC",
+        "ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC",
+    ]
+    if "pgvector" in svc.extensions or "vector" in svc.extensions:
+        init.append("CREATE EXTENSION IF NOT EXISTS vector")
     return ManagedSpec(
         image=f"pgvector/pgvector:pg{version}",
         env=env,
@@ -100,9 +109,7 @@ def _postgres(svc: Service, project: str, state: State) -> ManagedSpec:
         health_cmd="pg_isready -U app -d app || exit 1",
         security=dict(_DATASTORE_SECURITY),
         internal_port=5432,
-        # pgvector ships the extension; create it on first init.
-        init_sql=("CREATE EXTENSION IF NOT EXISTS vector;"
-                  if "pgvector" in svc.extensions or "vector" in svc.extensions else None),
+        init_sql="; ".join(init) + ";",
     )
 
 
