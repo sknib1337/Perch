@@ -136,8 +136,12 @@ def cmd_run(args) -> int:
     svc = m.by_name().get(args.service)
     if not svc:
         sys.exit(f"no service named '{args.service}'")
+    try:
+        rec._check_supply_chain(svc)              # C12: don't run a disallowed image
+    except ValueError as e:
+        sys.exit(str(e))
     DockerBackend().ensure_network(m.project)
-    code = DockerBackend().run_once(svc, rec._ctx(svc))
+    code = DockerBackend().run_once(svc, rec._ctx(svc, mint=True))
     print(f"{args.service} exited with {code}")
     return code
 
@@ -221,8 +225,13 @@ def cmd_scheduler(args) -> int:
             last_minute = now
             for svc in scheduled:
                 if cron_matches(svc.schedule, now):
+                    try:
+                        rec._check_supply_chain(svc)      # C12: skip a disallowed image
+                    except ValueError as e:
+                        print(f"[{now:%H:%M}] BLOCKED {svc.name}: {e}")
+                        continue
                     print(f"[{now:%H:%M}] running {svc.name}")
-                    backend.run_once(svc, rec._ctx(svc))
+                    backend.run_once(svc, rec._ctx(svc, mint=True))
             for svc in backup_jobs:
                 if cron_matches(svc.backup["schedule"], now):
                     print(f"[{now:%H:%M}] backing up {svc.name}")
@@ -336,7 +345,8 @@ def cmd_up(args) -> int:
 
 def cmd_serve(args) -> int:
     from .api import serve
-    serve(manifest_path=args.file, host=args.host, port=args.port)
+    serve(manifest_path=args.file, host=args.host, port=args.port,
+          require_auth=args.require_auth)
     return 0
 
 
@@ -377,6 +387,8 @@ def main(argv: list[str] | None = None) -> int:
     srs.add_argument("service"); srs.add_argument("file_path")
     ssv = sub.add_parser("serve", help="run the web console + API")
     ssv.add_argument("--host", default="127.0.0.1"); ssv.add_argument("--port", type=int, default=8787)
+    ssv.add_argument("--require-auth", action="store_true",
+                     help="require a bearer token (PERCH_API_TOKENS / .perch/api_tokens.json)")
     sd = sub.add_parser("destroy"); sd.add_argument("-y", "--yes", action="store_true")
 
     args = p.parse_args(argv)

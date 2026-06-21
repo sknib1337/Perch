@@ -8,8 +8,10 @@ the managed-service catalog. It also serves the web console from perch/web/.
 Design notes:
 - All secret values are masked. Never returns resolved ${VAR} values or
   managed-service credentials in clear text -- only key names.
-- Binds 127.0.0.1 by default. It is unauthenticated; do not expose it directly.
-  Put it behind the Perch proxy + auth, or an SSH tunnel, before remote use.
+- Binds 127.0.0.1 by default and is unauthenticated unless started with
+  `perch serve --require-auth` (C7), which gates /api/ behind a bearer token and a
+  viewer/admin role check (writes need admin; static console assets stay public).
+  Without it, still localhost-only -- put it behind the proxy/SSH before remote use.
 - Docker-dependent calls degrade gracefully (empty/`error` fields) so the console
   still renders a useful diagnostic state on a host where Docker isn't running.
 
@@ -19,7 +21,10 @@ are unit-tested without Docker.
 
 from __future__ import annotations
 
+import hmac
 import json
+import os
+import secrets
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -34,6 +39,106 @@ from .state import State
 
 WEB_DIR = Path(__file__).parent / "web"
 MASK = "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022"
+
+# ---- C7: authenticated control plane ------------------------------------
+API_TOKENS_ENV = "PERCH_API_TOKENS"
+_ROLE_RANK = {"viewer": 0, "admin": 1}
+
+
+def _valid_role(role: str, where: str) -> str | None:
+    """Normalize a role and reject anything unknown -- fail closed, never default
+    a malformed role to admin (a typo must not silently grant write access)."""
+    norm = str(role).strip().lower()
+    if norm not in _ROLE_RANK:
+        print(f"[perch] WARNING: ignoring token with invalid role {role!r} ({where})",
+              file=sys.stderr)
+        return None
+    return norm
+
+
+def _parse_tokens(raw: str) -> dict:
+    """Parse `tok:role,tok2:role2`. A *bare* `tok` (no colon) defaults to admin;
+    a `tok:` with an empty/unknown role is rejected, not silently made admin."""
+    out: dict[str, str] = {}
+    for part in raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if ":" in part:
+            tok, _, role = part.rpartition(":")
+            tok = tok.strip()
+            role = _valid_role(role, "$" + API_TOKENS_ENV)
+            if tok and role:
+                out[tok] = role
+        else:
+            out[part] = "admin"
+    return out
+
+
+def load_api_tokens(root: str = ".perch", env=None) -> dict:
+    """Tokens from $PERCH_API_TOKENS and/or a .perch/api_tokens.json map."""
+    env = os.environ if env is None else env
+    tokens: dict[str, str] = {}
+    raw = env.get(API_TOKENS_ENV)
+    if raw:
+        tokens.update(_parse_tokens(raw))
+    p = Path(root) / "api_tokens.json"
+    if p.exists():
+        try:
+            data = json.loads(p.read_text()) or {}
+        except (json.JSONDecodeError, OSError) as e:
+            print(f"[perch] WARNING: could not load {p}: {e}", file=sys.stderr)
+            data = {}
+        for tok, role in data.items():
+            tok = str(tok).strip()
+            role = _valid_role(role, str(p))   # normalize + reject unknown roles
+            if tok and role:
+                tokens[tok] = role
+    return tokens
+
+
+class AuthPolicy:
+    """Bearer-token auth with a minimal viewer/admin role check. Reads under
+    /api/ need `viewer`; writes (POST) need `admin`; static console assets are
+    public (they carry no secrets). When auth is not required, everything is
+    allowed -- today's localhost-only behavior."""
+
+    def __init__(self, tokens: dict | None = None, require: bool = False):
+        self.tokens = dict(tokens or {})
+        self.require = require
+
+    def role_for(self, token: str | None) -> str | None:
+        if not token:
+            return None
+        # Compare on encoded bytes: a non-ASCII token (HTTP headers decode as
+        # latin-1) would make compare_digest raise on str, turning a clean 401
+        # into a 500. Bytes never raise and simply don't match the ASCII tokens.
+        tok = token.encode("utf-8")
+        match = None
+        for known, role in self.tokens.items():   # constant-time, no early exit
+            if hmac.compare_digest(known.encode("utf-8"), tok):
+                match = role
+        return match
+
+    @staticmethod
+    def required_role(method: str, path: str) -> str | None:
+        if not path.startswith("/api/"):
+            return None                            # static assets: public
+        return "admin" if method == "POST" else "viewer"
+
+    def check(self, method: str, path: str, token: str | None) -> int:
+        """Return an HTTP status: 200 allow, 401 unauthenticated, 403 forbidden."""
+        if not self.require:
+            return 200
+        need = self.required_role(method, path)
+        if need is None:
+            return 200
+        role = self.role_for(token)
+        if role is None:
+            return 401
+        if _ROLE_RANK.get(role, -1) < _ROLE_RANK[need]:
+            return 403
+        return 200
 
 
 class PerchAPI:
@@ -223,7 +328,9 @@ class PerchAPI:
 
 
 # ---- HTTP layer ---------------------------------------------------------
-def make_handler(api: PerchAPI):
+def make_handler(api: PerchAPI, policy: AuthPolicy | None = None):
+    policy = policy or AuthPolicy()
+
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *a):  # quiet
             pass
@@ -236,6 +343,21 @@ def make_handler(api: PerchAPI):
             self.end_headers()
             self.wfile.write(body)
 
+        def _token(self) -> str | None:
+            auth = self.headers.get("Authorization", "")
+            if auth.startswith("Bearer "):
+                return auth[len("Bearer "):].strip() or None
+            return self.headers.get("X-Perch-Token", "").strip() or None
+
+        def _authorized(self) -> bool:
+            """Gate the request; emit 401/403 and return False if not allowed."""
+            path = urlparse(self.path).path
+            status = policy.check(self.command, path, self._token())
+            if status == 200:
+                return True
+            self._send({"error": "unauthorized" if status == 401 else "forbidden"}, status)
+            return False
+
         def _static(self, path: str):
             rel = "index.html" if path in ("/", "") else path.lstrip("/")
             f = (WEB_DIR / rel).resolve()
@@ -247,6 +369,8 @@ def make_handler(api: PerchAPI):
             self._send(f.read_bytes(), ctype=ctype)
 
         def do_GET(self):
+            if not self._authorized():
+                return
             p = urlparse(self.path).path
             r = {
                 "/api/project": api.project, "/api/services": api.services,
@@ -266,6 +390,8 @@ def make_handler(api: PerchAPI):
             return self._static(p)
 
         def do_POST(self):
+            if not self._authorized():
+                return
             p = urlparse(self.path).path
             length = int(self.headers.get("Content-Length", 0) or 0)
             body = json.loads(self.rfile.read(length) or b"{}") if length else {}
@@ -280,11 +406,25 @@ def make_handler(api: PerchAPI):
     return Handler
 
 
-def serve(manifest_path: str = "perch.yaml", host: str = "127.0.0.1", port: int = 8787) -> None:
+def serve(manifest_path: str = "perch.yaml", host: str = "127.0.0.1", port: int = 8787,
+          require_auth: bool = False) -> None:
     api = PerchAPI(Manifest.load(manifest_path))
-    httpd = ThreadingHTTPServer((host, port), make_handler(api))
+    policy = None
+    if require_auth:
+        tokens = load_api_tokens()
+        if not tokens:                              # bootstrap a usable admin token
+            tok = secrets.token_urlsafe(32)
+            tokens = {tok: "admin"}
+            print("No API tokens configured; generated a one-time admin token:")
+            print(f"    {tok}")
+            print("  Send it as:  Authorization: Bearer <token>")
+            print(f"  (persist your own via ${API_TOKENS_ENV} or .perch/api_tokens.json)")
+        policy = AuthPolicy(tokens, require=True)
+        print(f"Authentication required: {len(tokens)} token(s); writes need role 'admin'.")
+    httpd = ThreadingHTTPServer((host, port), make_handler(api, policy))
     print(f"Perch console on http://{host}:{port}  (project: {api.m.project})")
-    print("Bound to localhost and unauthenticated -- do not expose directly.")
+    if not require_auth:
+        print("Bound to localhost and unauthenticated -- do not expose directly.")
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
