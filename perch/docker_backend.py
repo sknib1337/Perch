@@ -89,6 +89,48 @@ class DockerBackend:
                 "vimagick/tinyproxy", check=False, capture=False)
         _docker("network", "connect", egress.main_network(project), cname, check=False)
 
+    def ensure_mcp_gateway(self, project: str, service: str, image: str,
+                           config: dict, host_spool_dir: str) -> None:
+        """Run a per-agent MCP mediating gateway (C9): our stdlib gateway code on a
+        minimal python image, with the perch package mounted read-only and the
+        policy/servers config + decision spool mounted in. On the internal net (so
+        the agent reaches it) and the main net (so it can reach HTTP upstreams)."""
+        import perch
+        from . import egress, mediation
+        cname = mediation.gateway_name(project, service)
+        pkg = Path(perch.__file__).resolve().parent          # the perch/ package dir
+        # Stable per-service config dir (not a fresh mkdtemp each run): the gateway
+        # config carries resolved upstream URLs (possibly secrets), so write it 0600
+        # and overwrite in place rather than leaking accumulating world-readable copies.
+        cfg_dir = Path(host_spool_dir).parent.parent / "mcp-config" / service
+        cfg_dir.mkdir(parents=True, exist_ok=True)
+        cfg_path = cfg_dir / "gateway.json"
+        fd = os.open(str(cfg_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(json.dumps(config))
+        os.chmod(cfg_path, 0o600)             # belt-and-suspenders across umasks/Windows
+        Path(host_spool_dir).mkdir(parents=True, exist_ok=True)
+        _docker("rm", "-f", cname, check=False)
+        _docker("pull", image, check=False, capture=False)
+        _docker("run", "-d", "--name", cname,
+                "--network", egress.internal_network(project),
+                "--label", self.label_managed,
+                "--label", f"perch.project={project}",
+                "--label", f"perch.service=mcp-{service}",
+                "--restart", "unless-stopped",
+                # Hardened like every other workload, and never an IP router between
+                # its two nets -- the only path off-box for the agent is this gateway.
+                "--sysctl", "net.ipv4.ip_forward=0",
+                "--read-only", "--tmpfs", "/tmp:rw,noexec,nosuid,size=16m",
+                "--security-opt", "no-new-privileges:true",
+                "-e", "PYTHONPATH=/perch-pkg", "-e", "PYTHONDONTWRITEBYTECODE=1",
+                "-v", f"{pkg}:/perch-pkg/perch:ro",
+                "-v", f"{cfg_path}:/etc/perch/gateway.json:ro",
+                "-v", f"{host_spool_dir}:/var/perch/spool",
+                image, "python", "-m", "perch.gateway", "/etc/perch/gateway.json",
+                check=False, capture=False)
+        _docker("network", "connect", egress.main_network(project), cname, check=False)
+
     # ---- introspection --------------------------------------------------
     def list_managed(self, project: str) -> list[LiveService]:
         out = _docker("ps", "-a", "--filter", f"label={self.label_managed}",

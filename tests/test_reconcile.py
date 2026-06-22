@@ -20,6 +20,8 @@ class FakeBackend:
     def ensure_network(self, project): return f"perch-{project}"
     def ensure_egress_proxy(self, project, service, allow_hosts):
         self.calls.append(("egress_proxy", service, list(allow_hosts)))
+    def ensure_mcp_gateway(self, project, service, image, config, host_spool_dir):
+        self.calls.append(("mcp_gateway", service, image, config))
     def attach_internal(self, project, name):
         self.calls.append(("attach_internal", name))
     def fingerprint(self, svc): return ""
@@ -1187,13 +1189,216 @@ def test_manifest_mcp_policy_and_hash():
     assert a.config_hash() != base                     # enabling mcp is a real change
 
 
-def test_reconcile_mcp_does_not_inject_unbuilt_gateway():
-    # The gateway process isn't shipped yet, so we must NOT point the agent at a
-    # non-existent endpoint; the policy is declarative until the gateway lands.
+def test_reconcile_mcp_injects_gateway_env_only_when_set():
+    # With the gateway shipped (C9), an mcp-enabled agent is pointed at its gateway;
+    # an agent with no mcp block is untouched (backwards compatible).
+    plain = svc("plain", type="agent")
+    assert "PERCH_MCP_GATEWAY" not in dict(
+        Reconciler(FakeBackend(), Manifest("p", [plain]), state=_state())._ctx(plain).env)
     a = svc("worker", type="agent"); a.mcp = {"allow": ["github.*"]}
     env = dict(Reconciler(FakeBackend(), Manifest("p", [a]), state=_state())._ctx(a).env)
-    assert "PERCH_MCP_GATEWAY" not in env
-    assert a.mcp_policy().authorized("github.x")        # policy still available
+    assert env["PERCH_MCP_GATEWAY"] == "http://perch-p-mcp-worker:8900"
+
+
+def test_reconcile_apply_starts_mcp_gateway_with_policy():
+    a = svc("worker", type="agent")
+    a.mcp = {"allow": {"tools": ["github.*"]}, "servers": {"github": {"url": "https://u"}}}
+    fb = FakeBackend()
+    Reconciler(fb, Manifest("p", [a]), state=_state()).apply()
+    gw = [c for c in fb.calls if c[0] == "mcp_gateway"]
+    assert gw and gw[0][1] == "worker"
+    cfg = gw[0][3]
+    assert cfg["policy"]["tools"] == ["github.*"] and cfg["servers"] == {"github": {"url": "https://u"}}
+    assert cfg["spool"] == "/var/perch/spool/mcp.jsonl" and cfg["port"] == 8900
+    assert cfg["quarantined"] is False                        # not quarantined on a clean run
+
+
+def test_reconcile_no_mcp_is_backwards_compatible():
+    # Absent mcp: no gateway, no env, and an identical config hash.
+    a = svc("worker", type="agent")
+    base = a.config_hash()
+    fb = FakeBackend()
+    rec = Reconciler(fb, Manifest("p", [a]), state=_state())
+    rec.apply()
+    assert not any(c[0] == "mcp_gateway" for c in fb.calls)
+    assert "PERCH_MCP_GATEWAY" not in dict(rec._ctx(a).env)
+    assert a.config_hash() == base
+
+
+# ---- C9: full-coverage mediation policy (perch/mediation.py) -------------
+def test_mediation_policy_per_capability_default_deny():
+    p = medmod.MediationPolicy(tools=["github.*"], resources=["fs://**"], prompts=["gh.*"])
+    assert p.authorized_tool("github.x") and not p.authorized_tool("paypal.charge")
+    assert p.authorized_resource("fs://a/b/c.txt") and not p.authorized_resource("s3://x")
+    assert p.authorized_prompt("gh.review") and not p.authorized_prompt("evil.x")
+    empty = medmod.MediationPolicy()
+    assert not empty.authorized_tool("anything") and not empty.authorized_resource("fs://a")
+
+
+def test_mediation_policy_resource_glob_segment_vs_recursive():
+    p = medmod.MediationPolicy(resources=["fs://docs/*"])
+    assert p.authorized_resource("fs://docs/readme")
+    assert not p.authorized_resource("fs://docs/sub/file")     # * doesn't cross '/'
+    assert medmod.MediationPolicy(resources=["fs://docs/**"]).authorized_resource("fs://docs/sub/file")
+
+
+def test_mediation_policy_sampling_completion_default_deny():
+    assert not medmod.MediationPolicy().sampling
+    assert medmod.MediationPolicy(sampling=True).sampling
+    assert not medmod.MediationPolicy().completion
+
+
+def test_mediation_policy_old_allow_list_is_tools():
+    p = medmod.MediationPolicy.from_manifest({"allow": ["github.*"]})
+    assert p.authorized_tool("github.x") and not p.authorized_resource("fs://a")
+    assert medmod.MediationPolicy.from_config(p.to_config()).authorized_tool("github.y")
+
+
+# ---- C9: MCP protocol mediation (perch/mcp.py) --------------------------
+from perch import mcp as mcpmod  # noqa: E402
+
+
+def test_mcp_mediate_methods():
+    p = medmod.MediationPolicy(tools=["github.read"], resources=["fs://**"], prompts=["gh.*"])
+    call = lambda m, params=None: mcpmod.mediate({"id": 1, "method": m, "params": params or {}}, p)
+    assert call("tools/call", {"name": "github.read"}).allowed
+    assert not call("tools/call", {"name": "github.delete"}).allowed
+    assert call("resources/read", {"uri": "fs://x"}).allowed
+    assert not call("resources/read", {"uri": "s3://x"}).allowed
+    assert call("prompts/get", {"name": "gh.review"}).allowed
+    assert call("tools/list").allowed and call("tools/list").filter == "tools"
+    assert not call("sampling/createMessage").allowed          # default deny
+    assert medmod.MediationPolicy(sampling=True).sampling
+    assert call("initialize").allowed and call("ping").allowed
+    assert not call("evil/method").allowed                     # unknown -> fail closed
+
+
+def test_mcp_mediate_fails_closed_on_malformed():
+    p = medmod.MediationPolicy(tools=["*"])
+    assert not mcpmod.mediate("not-an-object", p).allowed
+    assert not mcpmod.mediate({"id": 1}, p).allowed            # no method
+    assert not mcpmod.mediate({"id": 1, "method": "tools/call", "params": {"name": "a\nb"}}, p).allowed
+
+
+def test_mcp_jsonrpc_error_shape():
+    err = mcpmod.jsonrpc_error(7, "denied")
+    assert err == {"jsonrpc": "2.0", "id": 7, "error": {"code": -32001, "message": "denied"}}
+
+
+# ---- C9: the gateway core (perch/gateway.py) ----------------------------
+from perch import gateway as gwmod  # noqa: E402
+
+
+class _FakeUpstreams:
+    def __init__(self, names, responder):
+        self._names = list(names)
+        self._responder = responder
+        self.sent = []
+    def names(self): return list(self._names)
+    def send(self, server, message):
+        self.sent.append((server, message))
+        return self._responder(server, message)
+
+
+def _gw(policy, upstreams, spool=None):
+    return gwmod.Gateway(project="p", service="w", subject="perch://p/agent/w",
+                         policy=policy, upstreams=upstreams, spool=spool, clock=lambda: 1000)
+
+
+def test_gateway_forwards_allowed_and_rewrites_name():
+    pol = medmod.MediationPolicy(tools=["github.create_issue"])
+    up = _FakeUpstreams(["github"], lambda s, m: {"jsonrpc": "2.0", "id": m["id"],
+                                                  "result": {"ok": m["params"]["name"]}})
+    r = _gw(pol, up).handle_payload({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                                     "params": {"name": "github.create_issue"}})
+    assert r["result"]["ok"] == "create_issue"                 # routed + name stripped to bare
+    assert up.sent[0][0] == "github"
+
+
+def test_gateway_denies_without_forwarding():
+    pol = medmod.MediationPolicy(tools=["github.read_*"])
+    up = _FakeUpstreams(["github"], lambda s, m: {"never": True})
+    r = _gw(pol, up).handle_payload({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                                     "params": {"name": "github.delete_repo"}})
+    assert r["error"]["code"] == -32001 and up.sent == []      # denied, never forwarded
+
+
+def test_gateway_filters_list_to_allowlist():
+    pol = medmod.MediationPolicy(tools=["github.create_issue"])
+    up = _FakeUpstreams(["github"], lambda s, m: {"jsonrpc": "2.0", "id": m["id"],
+        "result": {"tools": [{"name": "create_issue"}, {"name": "delete_repo"}]}})
+    r = _gw(pol, up).handle_payload({"jsonrpc": "2.0", "id": 3, "method": "tools/list"})
+    assert r["result"]["tools"] == [{"name": "github.create_issue"}]   # delete_repo stripped
+
+
+def test_gateway_spools_decisions(tmp_path=None):
+    import tempfile as _tf, json as _json, os as _os
+    d = _tf.mkdtemp(); spool = _os.path.join(d, "mcp.jsonl")
+    pol = medmod.MediationPolicy(tools=["github.read"])
+    up = _FakeUpstreams(["github"], lambda s, m: {"jsonrpc": "2.0", "id": m["id"], "result": {}})
+    g = _gw(pol, up, spool=spool)
+    g.handle_payload({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "github.read"}})
+    g.handle_payload({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": "github.write"}})
+    recs = [_json.loads(l) for l in open(spool) if l.strip()]
+    assert recs[0]["allowed"] and recs[0]["subject"] == "perch://p/agent/w"
+    assert not recs[1]["allowed"] and recs[1]["method"] == "tools/call"
+
+
+def test_reconcile_ingests_mcp_spool_and_quarantines():
+    # Denied tool calls in the spool drive the C11 Detector -> Quarantine loop.
+    from perch import audit as auditmod
+    a = svc("worker", type="agent"); a.mcp = {"allow": ["github.read"]}
+    st = _state()
+    rec = Reconciler(FakeBackend(), Manifest("p", [a]), state=st)
+    subject = __import__("perch.identity", fromlist=["subject_for"]).subject_for("p", "worker", "agent")
+    spool = st.path.parent / "mcp-spool" / "worker"
+    spool.mkdir(parents=True)
+    import json as _json
+    with open(spool / "mcp.jsonl", "w") as f:
+        for i in range(12):
+            f.write(_json.dumps({"subject": subject, "method": "tools/call",
+                                 "tool": "github.delete", "allowed": False, "at": i}) + "\n")
+    rec._ingest_mcp_spools()
+    q = auditmod.Quarantine.from_dict(st.get("_quarantine", {}))
+    assert subject in q                                        # excessive_tool_denials tripped
+    assert not (spool / "mcp.jsonl").exists()                 # spool atomically consumed
+
+
+# ---- C9 hardening (folded from adversarial review) ----------------------
+def test_mediation_rejects_whitespace_names_no_silent_strip():
+    # str.strip() removes NBSP/U+2000.. that the control-char check misses; rejecting
+    # instead of normalizing keeps the matched name == the forwarded/audited name.
+    pol = medmod.ToolPolicy(["fs.read"])
+    assert not pol.authorized("fs.read\xa0") and not pol.authorized("fs.read ")
+    assert not pol.authorized(" fs.read") and not pol.authorized("fs.read ")
+    assert not medmod.MediationPolicy(resources=["fs://x"]).authorized_resource("fs://x\xa0")
+    # mediate() carries the validated name as target (no divergence between auth & forward)
+    deny = mcpmod.mediate({"id": 1, "method": "tools/call", "params": {"name": "fs.read\xa0"}},
+                          medmod.MediationPolicy(tools=["fs.read"]))
+    assert not deny.allowed
+    ok = mcpmod.mediate({"id": 1, "method": "tools/call", "params": {"name": "github.read"}},
+                        medmod.MediationPolicy(tools=["github.*"]))
+    assert ok.allowed and ok.target == "github.read"
+
+
+def test_gateway_batch_size_capped():
+    pol = medmod.MediationPolicy(tools=["*"])
+    up = _FakeUpstreams(["s"], lambda s, m: {"jsonrpc": "2.0", "id": m.get("id"), "result": {}})
+    big = [{"jsonrpc": "2.0", "id": i, "method": "ping"} for i in range(mcpmod.MAX_BATCH_ELEMENTS + 1)]
+    r = _gw(pol, up).handle_payload(big)
+    assert isinstance(r, list) and len(r) == 1 and "batch too large" in r[0]["error"]["message"]
+    assert up.sent == []                                  # rejected before any forwarding
+
+
+def test_gateway_quarantined_denies_everything():
+    pol = medmod.MediationPolicy(tools=["github.*"])
+    up = _FakeUpstreams(["github"], lambda s, m: {"jsonrpc": "2.0", "id": m.get("id"), "result": {}})
+    g = gwmod.Gateway(project="p", service="w", subject="s", policy=pol, upstreams=up,
+                      quarantined=True, clock=lambda: 1)
+    r = g.handle_payload({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "github.x"}})
+    assert r["error"]["message"] == "perch: subject quarantined" and up.sent == []
+    # even an otherwise-passthrough initialize is denied for a quarantined subject
+    assert g.handle_payload({"jsonrpc": "2.0", "id": 2, "method": "initialize"})["error"]["code"] == -32001
 
 
 # ---- C10: agent memory integrity & provenance (perch/memory.py) ---------

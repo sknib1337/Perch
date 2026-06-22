@@ -124,8 +124,23 @@ class Service:
         return bool(self.mcp)
 
     def mcp_policy(self):
-        from .mediation import ToolPolicy
-        return ToolPolicy((self.mcp or {}).get("allow", []))
+        """The full-coverage mediation policy (tools/resources/prompts + sampling/
+        completion). A bare `allow: [..]` list is read as tool patterns."""
+        from .mediation import MediationPolicy
+        return MediationPolicy.from_manifest(self.mcp or {})
+
+    @property
+    def mcp_servers(self) -> dict:
+        """Upstream MCP servers the gateway may forward to: name -> {url} (HTTP) or
+        {command, transport: stdio}."""
+        return (self.mcp or {}).get("servers", {}) if isinstance(self.mcp, dict) else {}
+
+    @property
+    def mcp_gateway_image(self) -> str:
+        """Image the gateway sidecar runs on. Default is python-slim (HTTP upstreams);
+        override for stdio servers that need another runtime (e.g. node:22-slim)."""
+        img = (self.mcp or {}).get("gateway_image") if isinstance(self.mcp, dict) else None
+        return img or "python:3.12-slim"
 
     @property
     def identity_enabled(self) -> bool:
