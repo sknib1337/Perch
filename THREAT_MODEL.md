@@ -185,7 +185,7 @@ into identity doesn't silently break writes); narrowing to read is one line.
 scoping (an inline policy) is a noted follow-on, as is keeping admin creds out of
 `mc`'s argv.
 
-### Phase C — runtime containment (Implemented; C9 enforcement partial)
+### Phase C — runtime containment (Implemented)
 
 > Delivered control-by-control across one changeset. Opt-in and backwards
 > compatible: absent the new config, networking and behavior are unchanged.
@@ -203,13 +203,37 @@ non-admin creds (C5/C6) for restricted agents. Per-workload isolated networks an
 filtering resolver are follow-ons.
 
 **C9 — MCP & tool-call mediation.** *Threat: 1.*
-An agent declares the tools it may use (`mcp: {allow: [server.tool globs]}`); a
-default-deny `ToolPolicy` authorizes every call (wildcards never cross the
-`server.tool` boundary, pattern metacharacters are literal, control characters are
-rejected) and emits a structured audit record. Module: `perch/mediation.py`.
-*Status:* the policy + audit core is implemented and tested; the mediating gateway
-process that calls it per request (the runtime enforcement point, requiring C8
-egress so the agent's only outbound path is the gateway) is the remaining glue.
+An agent declares what it may use (`mcp: {servers, allow: {tools, resources, prompts},
+sampling, completion}`); a per-agent **mediating gateway** sidecar
+(`perch/gateway.py`) authorizes every MCP message against that default-deny policy
+and forwards only what's allowed to the configured upstream servers (HTTP or local
+stdio). The full method surface is covered: `tools/call`, `resources/read`,
+`prompts/get` are authorized by target; `*/list` responses are filtered to the
+allowlist so the model never sees a disallowed capability; server-initiated
+`sampling/createMessage` and `completion/complete` are denied unless explicitly
+enabled; unknown/malformed messages fail closed. The agent's MCP client is pointed
+at the gateway (`PERCH_MCP_GATEWAY`); paired with C8 (the agent's only outbound path
+is the gateway) it cannot route around it. Wildcards never cross the `server.tool`
+boundary, pattern metacharacters are literal, names are validated rather than silently
+normalized (Unicode-whitespace tricks are refused), and the HTTP front bounds body
+size, batch length, and slow-client time so a hostile agent can't exhaust it. Each
+decision is appended to a spool the reconciler atomically claims and folds into the
+C10/C11 tamper-evident audit log; repeated tool denials trip the `Detector` and
+quarantine the subject, and the reconciler restarts the gateway so it denies that
+subject outright (a compromised agent that also uses `identity:` loses its brokered
+credentials too). Modules: `perch/mediation.py` (policy), `perch/mcp.py` (protocol
+decision core), `perch/gateway.py` (the sidecar).
+The gateway requires a **per-agent bearer token** on every request by default
+(generated per agent, sealed at rest by C4, injected into the agent and baked into the
+gateway config), so a co-resident container on the internal net can't use another
+agent's gateway; `mcp: {auth: false}` opts out for an MCP client that can't send a
+header, falling back to network trust.
+*Residuals:* stdio servers run inside the gateway image, which must carry their runtime
+(prefer HTTP upstreams for hostile workloads). Single-response Streamable-HTTP (SSE)
+upstreams are handled; multi-event server→agent streaming and a reverse sampling
+channel aren't proxied (denied by default). Detection is threshold-based over the
+bounded audit window (shared with C11): denials paced below the truncation horizon can
+evade the counter. DNS remains a covert channel (shared with C8).
 
 **C10 — Agent memory integrity & provenance.** *Threat: 1.*
 A tamper-evident, append-only memory log: a per-record hash chain gives provenance
