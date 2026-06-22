@@ -29,6 +29,8 @@ ISSUE = "credential.issue"
 DENY = "credential.deny"            # out-of-scope / quarantined
 ATTEST_FAIL = "attestation.fail"
 VERIFY_FAIL = "identity.verify_fail"
+TOOL_CALL = "tool.call"            # C9: an allowed MCP/tool call (gateway-mediated)
+TOOL_DENY = "tool.deny"            # C9: a denied MCP/tool call
 
 
 class AuditLog:
@@ -83,10 +85,11 @@ class Detector:
     signature of a compromised or misbehaving agent probing the broker."""
 
     def __init__(self, deny_threshold: int = 5, attest_fail_threshold: int = 3,
-                 verify_fail_threshold: int = 3):
+                 verify_fail_threshold: int = 3, tool_deny_threshold: int = 10):
         self.deny_threshold = deny_threshold
         self.attest_fail_threshold = attest_fail_threshold
         self.verify_fail_threshold = verify_fail_threshold
+        self.tool_deny_threshold = tool_deny_threshold
 
     def scan(self, events) -> "list[Anomaly]":
         tally: dict = defaultdict(lambda: defaultdict(int))
@@ -104,6 +107,11 @@ class Detector:
             if kinds.get(VERIFY_FAIL, 0) >= self.verify_fail_threshold:
                 out.append(Anomaly(subject, "repeated_identity_failure",
                                    kinds[VERIFY_FAIL], "identity proof failures"))
+            # C9: an agent hammering disallowed tool/MCP calls is the gateway-side
+            # signature of a compromised agent probing what it can reach.
+            if kinds.get(TOOL_DENY, 0) >= self.tool_deny_threshold:
+                out.append(Anomaly(subject, "excessive_tool_denials",
+                                   kinds[TOOL_DENY], "denied tool/MCP calls"))
         return out
 
 

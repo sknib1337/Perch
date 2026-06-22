@@ -172,6 +172,10 @@ manifest, off unless you set it, and maps to a numbered control in
 
     egress: { allow: [api.anthropic.com] }   # C8 — default-deny outbound; only these hosts
 
+    mcp:                            # C9 — default-deny tool/MCP mediation (enforced by a gateway)
+      servers: { github: https://mcp.example.com/github }
+      allow: { tools: ["github.*"] }          #   only these tools reach the upstream server
+
     verify:                         # C12 — supply-chain integrity
       pin: true                     #   image must be pinned to a @sha256 digest
       registries: [ghcr.io, docker.io]        #   and pulled only from these registries
@@ -192,6 +196,13 @@ What each one does:
   stay reachable. (Docker's embedded DNS resolver can still forward lookups upstream,
   so DNS is not a sealed channel — see [THREAT_MODEL.md](THREAT_MODEL.md) C8.) Omit
   the field for today's full outbound internet.
+- **`mcp`** — points the agent's MCP client at a per-agent **mediating gateway** that
+  authorizes every tool/resource/prompt call against a default-deny allowlist and
+  forwards only what's allowed to the `servers` you list (HTTP or local stdio).
+  `*/list` responses are filtered to the allowlist (the model never sees a disallowed
+  capability), and server-initiated `sampling`/`completion` are denied unless enabled.
+  With `egress` set, the gateway is the agent's only outbound path, so it can't be
+  bypassed; denied calls feed the same audit/quarantine loop as the broker.
 - **`verify`** — refuses to run an image unless it is pinned to an immutable
   `@sha256:` digest (a mutable `:latest` can change under you between pull and run)
   and, optionally, pulled only from allow-listed registries. A malformed digest
@@ -214,6 +225,12 @@ identities (the broker verifies with a public key it cannot forge) and **Fernet*
 for sealed state — no config change. `PERCH_CRYPTO_BACKEND=stdlib` forces the
 stdlib path even when the extra is present. The optional dependency is never
 required; stdlib is the baseline.
+
+**Pointing an agent at its gateway.** The gateway only mediates calls the agent's MCP
+client actually sends to it, so point the client at the gateway. `perch mcp-config
+<service>` prints a ready-to-paste `mcpServers` entry for it. A full walkthrough —
+identity + egress + mcp together — is in
+[examples/secure-agent/](examples/secure-agent/).
 
 When `identity` is enabled, every issuance, denial, and attestation result is
 written to a tamper-evident audit log (hash chain + keyed anchor); repeated denials
@@ -289,8 +306,9 @@ stale, stopped, unhealthy, or running outside the manifest.
 - TLS certificates for routed hostnames are issued and renewed automatically.
 
 **Opt-in — per-agent hardening:** per-run scoped identities, attestation, controlled
-egress, supply-chain pinning, sealed state, and an authenticated console. See
-[Securing agents](#securing-agents-opt-in) and [THREAT_MODEL.md](THREAT_MODEL.md).
+egress, tool/MCP mediation, supply-chain pinning, sealed state, and an authenticated
+console. See [Securing agents](#securing-agents-opt-in) and
+[THREAT_MODEL.md](THREAT_MODEL.md).
 
 ---
 
@@ -366,7 +384,9 @@ perch/
   crypto.py          C4  sealed state (HKDF encrypt-then-MAC -> Fernet)
   dataplane.py       C5/C6 identity-aware per-run datastore credentials + scopes
   egress.py          C8  egress policy + network segmentation
-  mediation.py       C9  MCP / tool-call mediation policy
+  mediation.py       C9  MCP / tool-call mediation policy (tools/resources/prompts)
+  mcp.py             C9  MCP protocol decision core (JSON-RPC, per-method mediation)
+  gateway.py         C9  per-agent mediating gateway sidecar (runtime enforcement)
   memory.py          C10 tamper-evident agent memory log
   audit.py           C11 audit log, anomaly detection, quarantine
   supplychain.py     C12 image digest pinning + registry allow-list

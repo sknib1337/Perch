@@ -8,23 +8,29 @@ gateway authorizes every call against that default-deny allowlist and records th
 decision. Combined with C8 egress (the agent's only outbound path is the gateway),
 the agent cannot route around it.
 
-This module is the pure policy + audit core, which is implemented and tested:
-  - `ToolPolicy`  -- default-deny allowlist of `server.tool` glob patterns.
+This module is the pure policy + audit core:
+  - `ToolPolicy`      -- default-deny allowlist of `server.tool` glob patterns.
+  - `MediationPolicy` -- full-coverage policy (tools, resources, prompts, sampling,
+                         completion) the gateway authorizes every MCP message against.
   - `MediationDecision` / `audit_record` -- the per-call verdict and its log entry.
 
-The mediating gateway process (an MCP proxy the agent's client points at) is the
-enforcement point that calls `ToolPolicy.authorize` per request; it is NOT yet
-shipped. Enforcement also requires C8 egress to be configured so the agent's only
-outbound path is the gateway -- until both land, the policy here is declarative
-intent, not a runtime control. The audit log is a natural consumer of C10's
-tamper-evident log.
+The mediating gateway process that calls this per request lives in `perch/gateway.py`
+(a per-agent sidecar the agent's MCP client points at). Paired with C8 egress -- the
+agent's only outbound path is the gateway -- the agent cannot route around it. Each
+decision is appended to a spool the reconciler folds into C10/C11's tamper-evident
+audit + quarantine loop.
 
-Manifest:
+Manifest (all keys optional; a bare `allow: [..]` list is read as tool patterns):
     mcp:
+      servers:
+        github: https://mcp.example.com/github        # HTTP upstream
+        fs: { command: ["python","-m","mcp_server_fs","/data"], transport: stdio }
       allow:
-        - "github.*"           # any tool on the github server
-        - "fs.read_*"          # only read_* tools on the fs server
-        - "search.query"       # one exact tool
+        tools:     ["github.*", "fs.read_*"]          # server.tool globs
+        resources: ["fs://**"]                        # resource-URI path globs
+        prompts:   ["github.*"]                        # server.prompt globs
+      sampling: false        # server->agent sampling, default deny
+      completion: false
 """
 
 from __future__ import annotations
@@ -47,6 +53,40 @@ def _compile(pattern: str) -> "re.Pattern":
     return re.compile(rx)
 
 
+def _compile_path(pattern: str) -> "re.Pattern":
+    """Translate a resource-URI glob: `*` matches within a path segment (never
+    crosses `/`), `**` matches across segments, and every other character --
+    including `.` -- is literal. So `fs://**` allows all `fs` resources while
+    `fs://docs/*` can't reach into a subdirectory. A bare `*` is allow-all."""
+    if pattern == "*":
+        return re.compile(r".*", re.DOTALL)
+    out: list[str] = []
+    i = 0
+    while i < len(pattern):
+        if pattern[i] == "*":
+            if pattern[i:i + 2] == "**":
+                out.append(".*"); i += 2
+            else:
+                out.append("[^/]*"); i += 1
+        else:
+            out.append(re.escape(pattern[i])); i += 1
+    return re.compile("".join(out), re.DOTALL)
+
+
+def _clean(name) -> "str | None":
+    """Validate an authorization target without mutating it: reject non-strings,
+    empty, and any name containing whitespace or a control character. We do NOT
+    silently strip -- `str.strip()` removes Unicode spaces (NBSP, U+2000..) that the
+    `ord < 0x20` check misses, which would let `fs.read\\xa0` match the rule `fs.read`
+    while a DIFFERENT (un-stripped) name is forwarded/audited. Tool/resource/prompt
+    names never contain whitespace, so any is a reason to deny, closed."""
+    if not isinstance(name, str) or not name:
+        return None
+    if any(c.isspace() or ord(c) < 0x20 for c in name):
+        return None
+    return name
+
+
 def gateway_name(project: str, service: str) -> str:
     return f"perch-{project}-mcp-{service}"
 
@@ -54,6 +94,23 @@ def gateway_name(project: str, service: str) -> str:
 def gateway_env(project: str, service: str) -> dict:
     """Point an agent's MCP client at its mediating gateway."""
     return {"PERCH_MCP_GATEWAY": f"http://{gateway_name(project, service)}:{GATEWAY_PORT}"}
+
+
+def gateway_url(project: str, service: str) -> str:
+    return f"http://{gateway_name(project, service)}:{GATEWAY_PORT}/"
+
+
+def gateway_client_config(project: str, service: str, token: "str | None" = None) -> dict:
+    """A ready-to-use MCP client config (the common `mcpServers` schema) that points an
+    agent's client at its mediating gateway as a single Streamable-HTTP server. The
+    agent reaches the gateway by container name on the project network; with C8 egress
+    set, this is its only outbound path, so every tool call is mediated. When the
+    gateway requires auth (C1), `token` is included as a bearer header. Emit it with
+    `perch mcp-config <service>` and drop it into your agent's MCP client config."""
+    entry = {"type": "http", "url": gateway_url(project, service)}
+    if token:
+        entry["headers"] = {"Authorization": f"Bearer {token}"}
+    return {"mcpServers": {"perch-gateway": entry}}
 
 
 @dataclass
@@ -73,13 +130,14 @@ class ToolPolicy:
         self._compiled = [(p, _compile(p)) for p in self.allow]
 
     def authorize(self, tool: str) -> MediationDecision:
-        if not isinstance(tool, str):
-            return MediationDecision(str(tool), False, "invalid tool name")
-        tool = tool.strip()
-        # Reject empty and any control character (newline/null/...) before matching
-        # so a crafted name can't slip a wildcard past the allowlist.
-        if not tool or any(ord(c) < 0x20 for c in tool):
-            return MediationDecision(tool, False, "invalid tool name")
+        # Validate without mutating (see _clean): a name with whitespace/control
+        # chars is denied outright rather than silently normalized, so the matched
+        # name is exactly the name that gets forwarded and audited.
+        clean = _clean(tool)
+        if clean is None:
+            return MediationDecision(tool if isinstance(tool, str) else str(tool),
+                                     False, "invalid tool name")
+        tool = clean
         for pat, rx in self._compiled:
             if rx.fullmatch(tool):
                 return MediationDecision(tool, True, f"allowed by {pat!r}")
@@ -87,6 +145,86 @@ class ToolPolicy:
 
     def authorized(self, tool: str) -> bool:
         return self.authorize(tool).allowed
+
+
+class MediationPolicy:
+    """Full-coverage, default-deny policy the gateway applies to every MCP message:
+    tool calls, resource reads, and prompt fetches each have their own allowlist,
+    and server->agent `sampling`/`completion` are off unless explicitly enabled.
+
+    Built from the manifest `mcp:` block. A bare `allow: [..]` list (the original
+    shape) is read as tool patterns so existing manifests keep working unchanged."""
+
+    def __init__(self, *, tools=None, resources=None, prompts=None,
+                 sampling: bool = False, completion: bool = False):
+        self.tools = ToolPolicy(tools)                  # reuse server.tool glob engine
+        self.prompts = ToolPolicy(prompts)              # server.prompt -- same shape
+        self.resource_patterns = [str(p).strip() for p in (resources or []) if str(p).strip()]
+        self._resources = [(p, _compile_path(p)) for p in self.resource_patterns]
+        self.sampling = bool(sampling)
+        self.completion = bool(completion)
+
+    # ---- per-capability authorization (each fails closed) ---------------
+    def authorize_tool(self, name: str) -> MediationDecision:
+        return self.tools.authorize(name)
+
+    def authorize_prompt(self, name: str) -> MediationDecision:
+        return self.prompts.authorize(name)
+
+    def authorize_resource(self, uri: str) -> MediationDecision:
+        clean = _clean(uri)
+        if clean is None:
+            return MediationDecision(str(uri), False, "invalid resource uri")
+        for pat, rx in self._resources:
+            if rx.fullmatch(clean):
+                return MediationDecision(clean, True, f"allowed by {pat!r}")
+        return MediationDecision(clean, False, "no allow rule matched (default deny)")
+
+    # convenience predicates used by response filtering in the gateway
+    def authorized_tool(self, name: str) -> bool:
+        return self.tools.authorized(name)
+
+    def authorized_resource(self, uri: str) -> bool:
+        return self.authorize_resource(uri).allowed
+
+    def authorized_prompt(self, name: str) -> bool:
+        return self.prompts.authorized(name)
+
+    # back-compat: a bare tool check (older callers used ToolPolicy directly)
+    def authorize(self, tool: str) -> MediationDecision:
+        return self.authorize_tool(tool)
+
+    def authorized(self, tool: str) -> bool:
+        return self.tools.authorized(tool)
+
+    # ---- (de)serialization: mounted into the gateway container ----------
+    @staticmethod
+    def from_manifest(mcp: dict) -> "MediationPolicy":
+        mcp = mcp or {}
+        allow = mcp.get("allow")
+        if isinstance(allow, dict):
+            tools = allow.get("tools", [])
+            resources = allow.get("resources", [])
+            prompts = allow.get("prompts", [])
+        elif isinstance(allow, list):                   # original shape -> tools only
+            tools, resources, prompts = allow, [], []
+        else:
+            tools = resources = prompts = []
+        return MediationPolicy(tools=tools, resources=resources, prompts=prompts,
+                               sampling=mcp.get("sampling", False),
+                               completion=mcp.get("completion", False))
+
+    def to_config(self) -> dict:
+        return {"tools": list(self.tools.allow), "prompts": list(self.prompts.allow),
+                "resources": list(self.resource_patterns),
+                "sampling": self.sampling, "completion": self.completion}
+
+    @staticmethod
+    def from_config(d: dict) -> "MediationPolicy":
+        d = d or {}
+        return MediationPolicy(tools=d.get("tools"), resources=d.get("resources"),
+                               prompts=d.get("prompts"), sampling=d.get("sampling", False),
+                               completion=d.get("completion", False))
 
 
 def audit_record(subject: str, decision: MediationDecision, at: int) -> dict:

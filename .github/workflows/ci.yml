@@ -12,5 +12,21 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "${{ matrix.python-version }}" }
+      - run: pip install pyyaml cryptography
+      - name: offline suite (cryptography backend -- Ed25519 / Fernet)
+        run: python tests/test_reconcile.py
+      - name: offline suite (stdlib backend)
+        run: python tests/test_reconcile.py
+        env: { PERCH_CRYPTO_BACKEND: stdlib }
+
+  integration:
+    runs-on: ubuntu-latest          # GitHub-hosted runners include Docker
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
       - run: pip install pyyaml
-      - run: python tests/test_reconcile.py
+      - name: C9 gateway e2e (real sockets + subprocess; no Docker)
+        run: python tests/e2e_gateway.py
+      - name: C9 gateway Docker launch check (real container)
+        run: python tests/docker_gateway_check.py
