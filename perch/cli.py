@@ -21,6 +21,7 @@ perch -- a tiny, friendly way to host your own apps and agents.
 from __future__ import annotations
 
 import argparse
+import json
 import shutil
 import socket
 import subprocess
@@ -361,6 +362,20 @@ def cmd_destroy(args) -> int:
     return 0
 
 
+def cmd_mcp_config(args) -> int:
+    """Print the MCP client config that points an agent at its mediating gateway (C9).
+    Drop the output into the agent's MCP client config so every tool call is brokered."""
+    m = _load(args.file)
+    svc = m.by_name().get(args.service)
+    if svc is None:
+        sys.exit(f"no service named {args.service!r} in {args.file}")
+    if not svc.mcp_enabled:
+        sys.exit(f"service {args.service!r} has no `mcp:` block -- nothing to mediate")
+    from . import mediation
+    print(json.dumps(mediation.gateway_client_config(m.project, svc.name), indent=2))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="perch", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -390,6 +405,9 @@ def main(argv: list[str] | None = None) -> int:
     ssv.add_argument("--require-auth", action="store_true",
                      help="require a bearer token (PERCH_API_TOKENS / .perch/api_tokens.json)")
     sd = sub.add_parser("destroy"); sd.add_argument("-y", "--yes", action="store_true")
+    smc = sub.add_parser("mcp-config",
+                         help="print the MCP client config that points an agent at its gateway (C9)")
+    smc.add_argument("service")
 
     args = p.parse_args(argv)
     dispatch = {
@@ -397,7 +415,7 @@ def main(argv: list[str] | None = None) -> int:
         "plan": cmd_plan, "apply": cmd_apply, "status": cmd_status,
         "logs": cmd_logs, "drift": cmd_drift, "run": cmd_run, "proxy": cmd_proxy,
         "scheduler": cmd_scheduler, "backup": cmd_backup, "restore": cmd_restore,
-        "serve": cmd_serve, "destroy": cmd_destroy,
+        "serve": cmd_serve, "destroy": cmd_destroy, "mcp-config": cmd_mcp_config,
     }
     try:
         return dispatch[args.cmd](args)

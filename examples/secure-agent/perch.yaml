@@ -1,0 +1,47 @@
+# A worked example: an AI agent running under the full secure-by-default posture.
+# Every security block below is opt-in -- delete any one and the agent still runs.
+# See examples/secure-agent/README.md for the end-to-end walkthrough.
+
+project: secure-agent-demo
+
+defaults:
+  restart: unless-stopped
+  resources: { memory: 512m, cpus: "1.0" }
+
+services:
+  # A managed Postgres the agent reads from -- never via a static password.
+  - name: db
+    type: postgres
+    version: "16"
+    extensions: [pgvector]
+
+  - name: assistant
+    type: agent
+    build: { context: ./assistant }        # your agent code (needs a Dockerfile)
+    bindings: [db]
+
+    # C1/C2/C5/C6 -- a per-run, scoped, short-TTL database credential instead of a
+    # permanent password. The agent holds no long-lived secret; the role expires.
+    identity:
+      ttl: 900
+      scopes: { db: read }                 # least privilege: read-only on db
+
+    # C8 -- default-deny outbound. The agent reaches only these hosts (via a
+    # per-workload filtering proxy); everything else is refused at the network.
+    egress: { allow: [api.anthropic.com] }
+
+    # C9 -- default-deny tool/MCP mediation. The agent's MCP client is pointed at a
+    # per-agent gateway (run `perch mcp-config assistant`); it authorizes every call
+    # and forwards only the allow-listed tools to the upstream servers below. With
+    # egress set, the gateway is the agent's only outbound path -- it can't be bypassed.
+    mcp:
+      servers:
+        github: https://mcp.example.com/github      # a remote HTTP/SSE MCP server
+      allow:
+        tools: ["github.search_*", "github.get_*"]  # only read-ish github tools
+      sampling: false                      # refuse server-initiated sampling
+
+    # C12 -- when you run a prebuilt image instead of build:, require it be pinned to
+    # an immutable @sha256 digest and pulled only from these registries.
+    # image: ghcr.io/you/assistant@sha256:<64 hex>
+    # verify: { pin: true, registries: [ghcr.io] }

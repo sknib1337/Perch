@@ -226,6 +226,12 @@ for sealed state — no config change. `PERCH_CRYPTO_BACKEND=stdlib` forces the
 stdlib path even when the extra is present. The optional dependency is never
 required; stdlib is the baseline.
 
+**Pointing an agent at its gateway.** The gateway only mediates calls the agent's MCP
+client actually sends to it, so point the client at the gateway. `perch mcp-config
+<service>` prints a ready-to-paste `mcpServers` entry for it. A full walkthrough —
+identity + egress + mcp together — is in
+[examples/secure-agent/](examples/secure-agent/).
+
 When `identity` is enabled, every issuance, denial, and attestation result is
 written to a tamper-evident audit log (hash chain + keyed anchor); repeated denials
 trip an anomaly threshold that can quarantine a subject and revoke its tickets

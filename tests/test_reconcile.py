@@ -1417,6 +1417,37 @@ def test_gateway_parses_json_and_sse_http_bodies():
         pass
 
 
+# ---- C9 agent wiring + worked example -----------------------------------
+def test_gateway_client_config_shape():
+    srv = medmod.gateway_client_config("proj", "worker")["mcpServers"]["perch-gateway"]
+    assert srv["type"] == "http" and srv["url"] == "http://perch-proj-mcp-worker:8900/"
+
+
+def _example_path():
+    import os as _os
+    return _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
+                         "examples", "secure-agent", "perch.yaml")
+
+
+def test_example_secure_agent_manifest_parses():
+    a = Manifest.load(_example_path()).by_name()["assistant"]
+    assert a.mcp_enabled and a.identity_enabled
+    assert a.mcp_servers == {"github": "https://mcp.example.com/github"}
+    assert a.mcp_policy().authorized_tool("github.search_repos")
+    assert not a.mcp_policy().authorized_tool("github.delete_repo")
+    assert a.identity_access("db") == "read"
+
+
+def test_cli_mcp_config_command():
+    import io, contextlib, json
+    from perch.cli import main
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = main(["-f", _example_path(), "mcp-config", "assistant"])
+    out = json.loads(buf.getvalue())
+    assert rc == 0 and out["mcpServers"]["perch-gateway"]["url"].endswith(":8900/")
+
+
 # ---- C10: agent memory integrity & provenance (perch/memory.py) ---------
 from perch import memory as memmod  # noqa: E402
 
