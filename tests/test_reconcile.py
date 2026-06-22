@@ -1401,6 +1401,22 @@ def test_gateway_quarantined_denies_everything():
     assert g.handle_payload({"jsonrpc": "2.0", "id": 2, "method": "initialize"})["error"]["code"] == -32001
 
 
+def test_gateway_parses_json_and_sse_http_bodies():
+    import json as _json
+    payload = {"jsonrpc": "2.0", "id": 1, "result": {"ok": True}}
+    # plain application/json
+    assert gwmod._parse_http_body("application/json", _json.dumps(payload).encode())["result"] == {"ok": True}
+    # SSE / Streamable HTTP: the JSON-RPC message rides in a data: field (real hosted MCP servers)
+    sse = f"event: message\ndata: {_json.dumps(payload)}\n\n".encode()
+    assert gwmod._parse_http_body("text/event-stream", sse)["result"] == {"ok": True}
+    # malformed body fails closed (never silently returns nothing)
+    try:
+        gwmod._parse_http_body("application/json", b"not json")
+        assert False, "expected GatewayError"
+    except gwmod.GatewayError:
+        pass
+
+
 # ---- C10: agent memory integrity & provenance (perch/memory.py) ---------
 from perch import memory as memmod  # noqa: E402
 

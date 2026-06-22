@@ -55,6 +55,42 @@ class GatewayError(Exception):
     failure never silently bypasses the gateway."""
 
 
+def _parse_http_body(ctype: str, raw: bytes) -> dict:
+    """Parse an MCP-over-HTTP response. Plain `application/json` is loaded directly;
+    a Streamable-HTTP `text/event-stream` (SSE) response carries the JSON-RPC message
+    in `data:` field(s) -- common for hosted MCP servers -- so extract that. Multi-event
+    streaming (server-initiated messages) is out of scope: we return the response
+    message (the event bearing a result/error)."""
+    text = raw.decode("utf-8", "replace")
+    is_sse = "text/event-stream" in ctype.lower() or text.lstrip().startswith(("event:", "data:", ":"))
+    if not is_sse:
+        try:
+            return json.loads(text)
+        except ValueError as e:
+            raise GatewayError(f"http upstream returned non-JSON: {e}") from e
+    events, buf = [], []
+    for line in text.splitlines():
+        if line.startswith("data:"):
+            buf.append(line[5:].lstrip())
+        elif not line.strip():               # blank line terminates one SSE event
+            if buf:
+                events.append("\n".join(buf)); buf = []
+    if buf:
+        events.append("\n".join(buf))
+    parsed = []
+    for ev in events:
+        try:
+            parsed.append(json.loads(ev))
+        except ValueError:
+            continue
+    for p in parsed:                         # prefer the JSON-RPC response message
+        if isinstance(p, dict) and ("result" in p or "error" in p):
+            return p
+    if parsed:
+        return parsed[0]
+    raise GatewayError("SSE upstream had no parseable JSON data")
+
+
 # ---- upstream transports (thin; fail closed) ----------------------------
 class HttpUpstream:
     def __init__(self, url: str):
@@ -77,6 +113,7 @@ class HttpUpstream:
             sid = resp.getheader("Mcp-Session-Id")
             if sid:
                 self._session = sid
+            ctype = resp.getheader("Content-Type", "")
             raw = resp.read()
         except OSError as e:
             raise GatewayError(f"http upstream unreachable: {e}") from e
@@ -84,10 +121,7 @@ class HttpUpstream:
             conn.close()
         if not raw:
             return {}
-        try:
-            return json.loads(raw)
-        except ValueError as e:
-            raise GatewayError(f"http upstream returned non-JSON: {e}") from e
+        return _parse_http_body(ctype, raw)
 
     def _ensure_ready(self) -> None:
         if self._ready:

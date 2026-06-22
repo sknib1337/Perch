@@ -227,11 +227,11 @@ decision core), `perch/gateway.py` (the sidecar).
 auth, so any container on the project internal net could use it; close this with
 broker-token auth (an `mcp`-resource credential the gateway verifies) or a per-agent
 network. stdio servers run inside the gateway image, which must carry their runtime
-(prefer HTTP upstreams for hostile workloads). Server→agent streaming (SSE) and a
-reverse sampling channel aren't proxied (denied by default). Detection is
-threshold-based over the bounded audit window (shared with C11): denials paced below
-the truncation horizon can evade the counter. DNS remains a covert channel (shared
-with C8).
+(prefer HTTP upstreams for hostile workloads). Single-response Streamable-HTTP (SSE)
+upstreams are handled; multi-event server→agent streaming and a reverse sampling
+channel aren't proxied (denied by default). Detection is threshold-based over the
+bounded audit window (shared with C11): denials paced below the truncation horizon can
+evade the counter. DNS remains a covert channel (shared with C8).
 
 **C10 — Agent memory integrity & provenance.** *Threat: 1.*
 A tamper-evident, append-only memory log: a per-record hash chain gives provenance
