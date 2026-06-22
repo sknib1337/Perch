@@ -1445,7 +1445,47 @@ def test_cli_mcp_config_command():
     with contextlib.redirect_stdout(buf):
         rc = main(["-f", _example_path(), "mcp-config", "assistant"])
     out = json.loads(buf.getvalue())
-    assert rc == 0 and out["mcpServers"]["perch-gateway"]["url"].endswith(":8900/")
+    srv = out["mcpServers"]["perch-gateway"]
+    assert rc == 0 and srv["url"].endswith(":8900/")
+    assert srv["headers"]["Authorization"].startswith("Bearer ")   # C1 token included by default
+
+
+# ---- C9/C1: per-agent gateway token auth --------------------------------
+def test_gateway_token_auth_constant_time_and_optional():
+    assert gwmod._token_ok(None, None)                     # no expected token -> auth disabled
+    assert gwmod._token_ok("secret", "secret")
+    assert not gwmod._token_ok("secret", "wrong")
+    assert not gwmod._token_ok("secret", None)             # required but absent -> deny
+    assert not gwmod._token_ok("secret", "sécret")    # non-ASCII -> clean deny, never a crash
+    assert not gwmod._token_ok("", "anything")             # empty expected is NOT "disabled" -> deny
+    assert gwmod._bearer({"Authorization": "Bearer abc"}) == "abc"
+    assert gwmod._bearer({"X-Perch-Token": "xyz"}) == "xyz"
+    assert gwmod._bearer({}) is None
+
+
+def test_mcp_auth_default_on_and_optout():
+    a = svc("worker", type="agent")
+    a.mcp = {"allow": ["github.*"]}
+    assert a.mcp_auth                                       # on by default when mcp is set
+    a.mcp = {"allow": ["github.*"], "auth": False}
+    assert not a.mcp_auth
+
+
+def test_reconcile_injects_gateway_token_and_bakes_it_in_config():
+    a = svc("worker", type="agent"); a.mcp = {"allow": ["github.*"]}
+    st = _state()
+    fb = FakeBackend()
+    rec = Reconciler(fb, Manifest("p", [a]), state=st)
+    rec.apply()
+    cfg = [c for c in fb.calls if c[0] == "mcp_gateway"][0][3]
+    token = cfg["auth_token"]
+    assert token                                           # gateway requires a token by default
+    env = dict(rec._ctx(a, mint=True).env)
+    assert env["PERCH_MCP_TOKEN"] == token                 # agent gets the matching token
+    # opt-out drops the token on both sides
+    a.mcp = {"allow": ["github.*"], "auth": False}
+    assert rec._mcp_token(a) is None
+    assert "PERCH_MCP_TOKEN" not in dict(rec._ctx(a, mint=True).env)
 
 
 # ---- C10: agent memory integrity & provenance (perch/memory.py) ---------

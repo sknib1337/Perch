@@ -33,6 +33,7 @@ path. The authorization + audit guarantees hold regardless.
 
 from __future__ import annotations
 
+import hmac
 import json
 import subprocess
 import sys
@@ -48,6 +49,26 @@ from .mediation import GATEWAY_PORT, MediationDecision, MediationPolicy, audit_r
 _CLIENT_INFO = {"name": "perch-mcp-gateway", "version": "1"}
 _PROTOCOL_VERSION = "2025-06-18"
 _UPSTREAM_TIMEOUT = 30          # seconds; a stalled upstream fails closed, never hangs the agent
+
+
+def _bearer(headers) -> "str | None":
+    """The presented gateway token: `Authorization: Bearer <t>` or `X-Perch-Token`."""
+    auth = headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        return auth[len("Bearer "):].strip() or None
+    return headers.get("X-Perch-Token", "").strip() or None
+
+
+def _token_ok(expected: "str | None", presented: "str | None") -> bool:
+    """Constant-time check. With no expected token (None) auth is disabled (allow); an
+    empty-string expected token is NOT "disabled" -- it denies, closed. Compare as
+    bytes: a non-ASCII header value makes `compare_digest` raise on str (HTTP headers
+    decode latin-1), which would crash the request thread instead of a clean 401."""
+    if expected is None:
+        return True
+    if not presented:
+        return False
+    return hmac.compare_digest(presented.encode("utf-8"), expected.encode("utf-8"))
 
 
 class GatewayError(Exception):
@@ -243,7 +264,7 @@ class Upstreams:
 class Gateway:
     def __init__(self, *, project: str, service: str, subject: str,
                  policy: MediationPolicy, upstreams, spool=None, quarantined: bool = False,
-                 clock=time.time):
+                 auth_token: "str | None" = None, clock=time.time):
         self.project = project
         self.service = service
         self.subject = subject
@@ -251,6 +272,7 @@ class Gateway:
         self.upstreams = upstreams
         self.spool = spool
         self.quarantined = quarantined         # C11: this agent's subject is quarantined -> deny all
+        self.auth_token = auth_token           # C1: per-agent bearer; None disables (see _token_ok)
         self.clock = clock
 
     # entry point: a parsed JSON payload (single message or a batch array)
@@ -401,6 +423,8 @@ def make_handler(gw: Gateway):
             return self._send({"error": "not found"}, 404)
 
         def do_POST(self):
+            if not _token_ok(gw.auth_token, _bearer(self.headers)):   # C1: per-agent bearer
+                return self._send(mcp_mod.jsonrpc_error(None, "perch: unauthorized"), 401)
             try:
                 length = int(self.headers.get("Content-Length") or 0)
             except (TypeError, ValueError):
@@ -430,7 +454,8 @@ def gateway_from_config(cfg: dict, upstreams=None) -> Gateway:
         subject=cfg.get("subject", ""),
         policy=MediationPolicy.from_config(cfg.get("policy", {})),
         upstreams=upstreams if upstreams is not None else Upstreams(cfg.get("servers", {})),
-        spool=cfg.get("spool"), quarantined=bool(cfg.get("quarantined", False)))
+        spool=cfg.get("spool"), quarantined=bool(cfg.get("quarantined", False)),
+        auth_token=cfg.get("auth_token"))
 
 
 def main(argv=None) -> int:
@@ -438,7 +463,7 @@ def main(argv=None) -> int:
     if not argv:
         print("usage: python -m perch.gateway <config.json>", file=sys.stderr)
         return 2
-    with open(argv[0], encoding="utf-8") as f:
+    with open(argv[0], encoding="utf-8-sig") as f:    # tolerate a BOM on the mounted config
         cfg = json.load(f)
     gw = gateway_from_config(cfg)
     port = int(cfg.get("port", GATEWAY_PORT))

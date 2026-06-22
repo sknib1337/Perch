@@ -136,6 +136,14 @@ class Service:
         return (self.mcp or {}).get("servers", {}) if isinstance(self.mcp, dict) else {}
 
     @property
+    def mcp_auth(self) -> bool:
+        """Whether the gateway requires a per-agent bearer token (C1). On by default;
+        set `mcp: {auth: false}` for an MCP client that can't send an auth header."""
+        if not isinstance(self.mcp, dict):
+            return False
+        return bool(self.mcp.get("auth", True))
+
+    @property
     def mcp_gateway_image(self) -> str:
         """Image the gateway sidecar runs on. Default is python-slim (HTTP upstreams);
         override for stdio servers that need another runtime (e.g. node:22-slim)."""

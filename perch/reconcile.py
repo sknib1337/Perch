@@ -368,6 +368,9 @@ class Reconciler:
                 # C9: point the agent's MCP client at its mediating gateway.
                 env = env + list(mediation_mod.gateway_env(self.m.project, svc.name).items())
                 no_proxy_extra.append(mediation_mod.gateway_name(self.m.project, svc.name))
+                token = self._mcp_token(svc)             # C1: per-agent bearer for the gateway
+                if token:
+                    env = env + [("PERCH_MCP_TOKEN", token)]
             if mode == "allow":
                 # Bound managed services bypass the proxy (they're internal, not
                 # internet hosts) so HTTP datastores stay reachable behind it; the
@@ -441,6 +444,13 @@ class Reconciler:
         # C9: fold gateway decision spools into the audit log + Detector/Quarantine.
         self._ingest_mcp_spools()
 
+    def _mcp_token(self, svc: Service) -> "str | None":
+        """C1: a stable, per-agent bearer the gateway requires on every request (sealed
+        at rest by C4). None when the agent set `mcp: {auth: false}`."""
+        if not (svc.mcp_enabled and svc.mcp_auth):
+            return None
+        return self.state.secret(self.m.project, svc.name, "mcp_token")
+
     def _ensure_mcp_gateway(self, svc: Service) -> None:
         """C9: (re)start the agent's mediating gateway sidecar with its policy and
         upstream-server map. The decision spool lives under the state dir and is
@@ -457,6 +467,7 @@ class Reconciler:
             "servers": svc.mcp_servers,
             "spool": "/var/perch/spool/mcp.jsonl",
             "quarantined": quarantined,
+            "auth_token": self._mcp_token(svc),          # C1: None when mcp.auth is false
         }
         self.b.ensure_mcp_gateway(self.m.project, svc.name, svc.mcp_gateway_image,
                                   config, host_spool_dir)

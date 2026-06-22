@@ -104,6 +104,11 @@ class DockerBackend:
         # and overwrite in place rather than leaking accumulating world-readable copies.
         cfg_dir = Path(host_spool_dir).parent.parent / "mcp-config" / service
         cfg_dir.mkdir(parents=True, exist_ok=True)
+        if os.name != "nt":                   # the file is 0600; restrict the dir too (POSIX)
+            try:
+                os.chmod(cfg_dir, 0o700)
+            except OSError:
+                pass
         cfg_path = cfg_dir / "gateway.json"
         fd = os.open(str(cfg_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w") as f:

@@ -372,7 +372,9 @@ def cmd_mcp_config(args) -> int:
     if not svc.mcp_enabled:
         sys.exit(f"service {args.service!r} has no `mcp:` block -- nothing to mediate")
     from . import mediation
-    print(json.dumps(mediation.gateway_client_config(m.project, svc.name), indent=2))
+    from .state import State
+    token = State().secret(m.project, svc.name, "mcp_token") if svc.mcp_auth else None
+    print(json.dumps(mediation.gateway_client_config(m.project, svc.name, token), indent=2))
     return 0
 
 

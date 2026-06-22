@@ -100,14 +100,17 @@ def gateway_url(project: str, service: str) -> str:
     return f"http://{gateway_name(project, service)}:{GATEWAY_PORT}/"
 
 
-def gateway_client_config(project: str, service: str) -> dict:
+def gateway_client_config(project: str, service: str, token: "str | None" = None) -> dict:
     """A ready-to-use MCP client config (the common `mcpServers` schema) that points an
     agent's client at its mediating gateway as a single Streamable-HTTP server. The
     agent reaches the gateway by container name on the project network; with C8 egress
-    set, this is its only outbound path, so every tool call is mediated. Emit it with
+    set, this is its only outbound path, so every tool call is mediated. When the
+    gateway requires auth (C1), `token` is included as a bearer header. Emit it with
     `perch mcp-config <service>` and drop it into your agent's MCP client config."""
-    return {"mcpServers": {"perch-gateway": {
-        "type": "http", "url": gateway_url(project, service)}}}
+    entry = {"type": "http", "url": gateway_url(project, service)}
+    if token:
+        entry["headers"] = {"Authorization": f"Bearer {token}"}
+    return {"mcpServers": {"perch-gateway": entry}}
 
 
 @dataclass

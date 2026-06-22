@@ -31,7 +31,8 @@ perch -f examples/secure-agent/perch.yaml mcp-config assistant
   "mcpServers": {
     "perch-gateway": {
       "type": "http",
-      "url": "http://perch-secure-agent-demo-mcp-assistant:8900/"
+      "url": "http://perch-secure-agent-demo-mcp-assistant:8900/",
+      "headers": { "Authorization": "Bearer <per-agent token>" }
     }
   }
 }
@@ -42,6 +43,11 @@ Desktop / Claude Code and compatible clients). The agent now sees one MCP server
 gateway — which multiplexes to the real upstreams in `mcp.servers`, but only forwards
 the allow-listed tools. Because egress is locked down, the gateway is the agent's only
 outbound path, so it cannot reach an upstream directly.
+
+The `Authorization` bearer (C1) is a per-agent token sealed in `.perch/state.json`; the
+gateway requires it on every request, so a co-resident container can't use the gateway.
+For an MCP client that can't send a header, set `mcp: { auth: false }` (and rely on the
+network boundary instead).
 
 ## 3. What's enforced
 

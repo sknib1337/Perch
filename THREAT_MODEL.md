@@ -223,10 +223,12 @@ quarantine the subject, and the reconciler restarts the gateway so it denies tha
 subject outright (a compromised agent that also uses `identity:` loses its brokered
 credentials too). Modules: `perch/mediation.py` (policy), `perch/mcp.py` (protocol
 decision core), `perch/gateway.py` (the sidecar).
-*Residuals:* v1 trusts the network boundary — the per-agent gateway has no per-request
-auth, so any container on the project internal net could use it; close this with
-broker-token auth (an `mcp`-resource credential the gateway verifies) or a per-agent
-network. stdio servers run inside the gateway image, which must carry their runtime
+The gateway requires a **per-agent bearer token** on every request by default
+(generated per agent, sealed at rest by C4, injected into the agent and baked into the
+gateway config), so a co-resident container on the internal net can't use another
+agent's gateway; `mcp: {auth: false}` opts out for an MCP client that can't send a
+header, falling back to network trust.
+*Residuals:* stdio servers run inside the gateway image, which must carry their runtime
 (prefer HTTP upstreams for hostile workloads). Single-response Streamable-HTTP (SSE)
 upstreams are handled; multi-event server→agent streaming and a reverse sampling
 channel aren't proxied (denied by default). Detection is threshold-based over the

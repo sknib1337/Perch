@@ -19,11 +19,13 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GATEWAY_PORT, ECHO_PORT, SSE_PORT = 8911, 9111, 9112
+TOKEN = "sim-per-agent-token"
 
 _STDIO_SERVER = '''
 import json, sys
@@ -102,10 +104,12 @@ def _serve(handler, port):
     return httpd
 
 
-def _rpc(method, params=None, mid=1):
+def _rpc(method, params=None, mid=1, token=TOKEN):
     body = json.dumps({"jsonrpc": "2.0", "id": mid, "method": method, "params": params or {}}).encode()
-    req = urllib.request.Request(f"http://127.0.0.1:{GATEWAY_PORT}/", data=body,
-                                 headers={"Content-Type": "application/json"})
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(f"http://127.0.0.1:{GATEWAY_PORT}/", data=body, headers=headers)
     with urllib.request.urlopen(req, timeout=15) as r:
         raw = r.read()
     return json.loads(raw) if raw else None
@@ -132,6 +136,7 @@ def run() -> int:
             "files": {"transport": "stdio", "command": [sys.executable, stdio_path]},
         },
         "spool": spool,
+        "auth_token": TOKEN,
     }
     cfg_path = os.path.join(work, "gateway.json")
     with open(cfg_path, "w") as f:
@@ -141,17 +146,31 @@ def run() -> int:
                           env=dict(os.environ, PYTHONPATH=REPO),
                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     try:
+        last_err = None
         for _ in range(50):
             try:
                 with urllib.request.urlopen(f"http://127.0.0.1:{GATEWAY_PORT}/healthz", timeout=1) as r:
                     if r.status == 200:
                         break
-            except Exception:
+            except Exception as ex:
+                last_err = ex
                 time.sleep(0.2)
         else:
-            print("GATEWAY DID NOT START:\n", gw.communicate(timeout=3)[0])
+            print("readiness last error:", repr(last_err))
+            gw.terminate()
+            try:
+                print("GATEWAY DID NOT START:\n", gw.communicate(timeout=3)[0])
+            except Exception as ex:
+                print("GATEWAY DID NOT START (no output):", ex)
             return 1
         print("gateway up; agent traffic over real HTTP\n")
+
+        # C1: an unauthenticated request is rejected before any mediation/forwarding
+        try:
+            _rpc("tools/list", mid=99, token=None)
+            check("unauthenticated request rejected (401)", False, "expected HTTP 401")
+        except urllib.error.HTTPError as he:
+            check("unauthenticated request rejected (401)", he.code == 401, f"got {he.code}")
 
         init = _rpc("initialize", {"protocolVersion": "2025-06-18"}, 1)
         check("initialize answered by gateway",
