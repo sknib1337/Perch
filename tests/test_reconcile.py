@@ -1724,6 +1724,96 @@ def test_apply_blocks_managed_unpinned_image_under_policy():
         assert "not pinned" in str(e)
 
 
+# ---- C: daemon-free manifest validation (`perch validate`) -----------------
+def test_validate_accepts_clean_manifest():
+    assert Manifest("p", [svc("web", port=8080)]).validate() == []
+
+
+def test_validate_flags_duplicate_names_and_unknown_type():
+    m = Manifest("p", [svc("web", port=8080), Service(name="web", type="mystery")])
+    probs = m.validate()
+    assert any("duplicate service name" in p for p in probs)
+    assert any("unknown type" in p for p in probs)
+
+
+def test_validate_workload_needs_build_or_image():
+    bare = Service(name="agent", type="agent")            # no build, no image
+    assert any("needs `build:` or `image:`" in p for p in Manifest("p", [bare]).validate())
+    withimg = Service(name="agent", type="agent", image="acme/a:1")
+    assert not any("needs `build:`" in p for p in Manifest("p", [withimg]).validate())
+
+
+def test_validate_binding_must_exist_and_be_managed():
+    web = svc("web", port=8080)                            # a webapp, not a datastore
+    worker = Service(name="worker", type="agent", build=Build("./x"),
+                     bindings=["web", "ghost"])
+    probs = Manifest("p", [web, worker]).validate()
+    assert any("binding 'ghost' references no service" in p for p in probs)
+    assert any("binding 'web' is not a managed" in p for p in probs)
+    # binding a real datastore is clean
+    ok = Service(name="worker", type="agent", build=Build("./x"), bindings=["db"])
+    assert Manifest("p", [pg("db"), ok]).validate() == []
+
+
+def test_validate_rest_api_database_reference():
+    api = Service(name="api", type="rest-api", database="db")   # db missing
+    assert any("references no service" in p for p in Manifest("p", [api]).validate())
+    api2 = Service(name="api", type="rest-api", database="db")
+    assert Manifest("p", [pg("db"), api2]).validate() == []
+
+
+def test_validate_webapp_route_needs_port():
+    s = svc("web", route=Route(host="web.localhost"))     # route but no port
+    assert any("route.host set but no `port:`" in p for p in Manifest("p", [s]).validate())
+
+
+def test_validate_flags_invalid_mcp_policy():
+    s = Service(name="a", type="agent", build=Build("./x"), mcp=["not", "a", "dict"])
+    assert any("invalid mcp policy" in p for p in Manifest("p", [s]).validate())
+
+
+# ---- integration: the flagship example composes C1 + C8 + C9 + C11 ----------
+def test_secure_agent_example_composes_all_controls():
+    """The flagship example manifest, as written on disk, wires per-agent identity +
+    gateway token (C1), default-deny egress (C8), and MCP mediation (C9) into ONE
+    agent's runtime context -- and a burst of denied tool calls drives the detector
+    to quarantine it (C11). Proves the controls compose, not just that each works
+    alone. The gateway *container* is separately proven on real Docker by
+    tests/docker_gateway_check.py and tests/e2e_gateway.py."""
+    import json as _json
+    from perch import audit as _audit
+    from perch.identity import subject_for
+    m = Manifest.load(_example_path())
+    assistant = m.by_name()["assistant"]
+
+    # C8: egress is default-deny with exactly the one declared host.
+    mode, hosts = assistant.egress_policy
+    assert mode == "allow" and hosts == ["api.anthropic.com"]
+
+    # C1 + C9: the agent's runtime env points at its mediating gateway, carries a
+    # per-agent bearer token, and declares its identity subject -- no static secret.
+    rec = Reconciler(FakeBackend(), m, state=_state())
+    env = dict(rec._ctx(assistant).env)            # mint=False: deterministic, no provisioning
+    subject = subject_for(m.project, "assistant", "agent")
+    assert env["PERCH_MCP_GATEWAY"].endswith(":8900")
+    assert env["PERCH_MCP_TOKEN"]                  # C1 per-agent gateway bearer present
+    assert env["PERCH_IDENTITY_SUBJECT"] == subject
+    # the gateway is the agent's only outbound path, so it bypasses the egress proxy
+    gw_host = medmod.gateway_name(m.project, "assistant")
+    assert any(gw_host in str(v) for v in env.values())
+
+    # C11: repeated denied tool calls (spooled by the gateway) quarantine the subject.
+    spool = rec.state.path.parent / "mcp-spool" / "assistant"
+    spool.mkdir(parents=True)
+    with open(spool / "mcp.jsonl", "w") as f:
+        for i in range(12):
+            f.write(_json.dumps({"subject": subject, "method": "tools/call",
+                                 "tool": "github.delete_repo", "allowed": False, "at": i}) + "\n")
+    rec._ingest_mcp_spools()
+    q = _audit.Quarantine.from_dict(rec.state.get("_quarantine", {}))
+    assert subject in q
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in tests:

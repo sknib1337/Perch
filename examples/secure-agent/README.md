@@ -5,9 +5,15 @@ database identity (C1/C2/C5/C6), default-deny egress (C8), mediated tool calls (
 optional image pinning (C12). Each block in [`perch.yaml`](perch.yaml) is independent —
 remove any and the agent still runs.
 
+The agent code lives in [`assistant/`](assistant/) — a tiny **stdlib-only demo** that
+prints its injected identity, confirms a brokered DB credential was handed to it, and
+proves mediation by making one non-allow-listed tool call (the gateway refuses it).
+Replace it with your real agent; the `perch.yaml` posture stays the same.
+
 ## 1. Deploy
 
 ```bash
+perch -f examples/secure-agent/perch.yaml validate   # structural check, no Docker
 export ANTHROPIC_API_KEY=...        # whatever your agent needs at runtime
 perch -f examples/secure-agent/perch.yaml up
 ```

@@ -4,6 +4,7 @@ perch -- a tiny, friendly way to host your own apps and agents.
   perch doctor                       # check Docker & co. are ready (start here)
   perch up                           # set up if needed, then bring everything online
   perch init                         # write a starter perch.yaml
+  perch validate                     # check the manifest (no Docker needed; CI-friendly)
   perch plan                         # dry run: show the diff
   perch apply [--rebuild]            # converge your host to the manifest
   perch status                       # what's running
@@ -75,6 +76,27 @@ def cmd_init(args) -> int:
     Path(args.file).write_text(STARTER)
     print(f"wrote {args.file}")
     return 0
+
+
+def cmd_validate(args) -> int:
+    """Daemon-free manifest check: parse + structural validation, no Docker needed.
+    Unlike `plan`, this never touches the live host, so it's safe for CI linting and
+    for previewing a manifest on a machine without Docker. Exits 2 if invalid."""
+    path = args.file
+    if not Path(path).exists():
+        sys.exit(f"{path} not found -- run `perch init` first")
+    try:
+        m = Manifest.load(path)
+    except Exception as e:
+        sys.exit(f"{path}: could not parse manifest -- {e}")
+    problems = m.validate()
+    if not problems:
+        print(f"{path}: valid -- project {m.project!r}, {len(m.services)} service(s)")
+        return 0
+    print(f"{path}: {len(problems)} problem(s):")
+    for p in problems:
+        print(f"  - {p}")
+    return 2
 
 
 def cmd_plan(args) -> int:
@@ -388,6 +410,7 @@ def main(argv: list[str] | None = None) -> int:
     su = sub.add_parser("up", help="set up if needed, then bring everything online")
     su.add_argument("--rebuild", action="store_true")
     sub.add_parser("doctor", help="check that Docker and everything else is ready")
+    sub.add_parser("validate", help="check the manifest without Docker (CI-friendly)")
     sp = sub.add_parser("plan"); sp.add_argument("--rebuild", action="store_true")
     sa = sub.add_parser("apply")
     sa.add_argument("--rebuild", action="store_true")
@@ -414,6 +437,7 @@ def main(argv: list[str] | None = None) -> int:
     args = p.parse_args(argv)
     dispatch = {
         "init": cmd_init, "up": cmd_up, "doctor": cmd_doctor,
+        "validate": cmd_validate,
         "plan": cmd_plan, "apply": cmd_apply, "status": cmd_status,
         "logs": cmd_logs, "drift": cmd_drift, "run": cmd_run, "proxy": cmd_proxy,
         "scheduler": cmd_scheduler, "backup": cmd_backup, "restore": cmd_restore,
