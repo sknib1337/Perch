@@ -306,6 +306,63 @@ class Manifest:
             visit(s, set())
         return ordered
 
+    def validate(self) -> list[str]:
+        """Daemon-free structural validation. Every check here is about the manifest
+        itself -- never the live host -- so it runs with no Docker present (CI lint,
+        pre-apply preview). Returns human-readable problems; an empty list means valid.
+        This is intentionally separate from `plan`, which diffs against the running host
+        and so legitimately needs the backend."""
+        problems: list[str] = []
+        names = [s.name for s in self.services]
+        for dup in sorted({n for n in names if names.count(n) > 1}):
+            problems.append(f"duplicate service name: {dup!r}")
+        by_name = self.by_name()
+        known = MANAGED_TYPES | WORKLOAD_TYPES
+        for s in self.services:
+            if not s.name:
+                problems.append("a service is missing 'name'")
+                continue
+            if s.type not in known:
+                problems.append(f"{s.name}: unknown type {s.type!r} "
+                                f"(expected one of {sorted(known)})")
+            # a workload (webapp/agent/function) needs something to run
+            if s.type in WORKLOAD_TYPES and not s.build and not s.image:
+                problems.append(f"{s.name}: a {s.type} needs `build:` or `image:`")
+            # bindings must reference an existing managed datastore
+            for b in s.bindings:
+                target = by_name.get(b)
+                if target is None:
+                    problems.append(f"{s.name}: binding {b!r} references no service")
+                elif not target.is_managed:
+                    problems.append(f"{s.name}: binding {b!r} is not a managed "
+                                    f"datastore (type={target.type})")
+            # rest-api/auth need a real postgres database
+            if s.type in ("rest-api", "auth"):
+                if not s.database:
+                    problems.append(f"{s.name}: a {s.type} needs `database:` "
+                                    f"naming a postgres service")
+                elif s.database not in by_name:
+                    problems.append(f"{s.name}: database {s.database!r} references no service")
+                elif by_name[s.database].type != "postgres":
+                    problems.append(f"{s.name}: database {s.database!r} is not a "
+                                    f"postgres service (type={by_name[s.database].type})")
+            # a webapp that wants a URL needs a port to proxy to
+            if s.type == "webapp" and s.route.host and not s.port:
+                problems.append(f"{s.name}: route.host set but no `port:` to proxy to")
+            # opt-in security blocks must compile to a usable policy
+            for label, build in (("mcp", s.mcp_policy), ("egress", lambda: s.egress_policy),
+                                 ("verify", s.supply_chain_policy)):
+                try:
+                    build()
+                except Exception as e:
+                    problems.append(f"{s.name}: invalid {label} policy: {e}")
+        # dependency cycles
+        try:
+            self.deploy_order()
+        except ValueError as e:
+            problems.append(str(e))
+        return problems
+
 
 def _sha(obj: Any) -> str:
     return hashlib.sha256(json.dumps(obj, sort_keys=True, default=str).encode()).hexdigest()[:16]

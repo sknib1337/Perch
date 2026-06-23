@@ -97,6 +97,7 @@ Requirements for the build source:
 Apply the change:
 
 ```bash
+perch validate    # structural check of the manifest (no Docker required)
 perch plan        # review the diff (no changes applied)
 perch up          # build and reconcile
 ```

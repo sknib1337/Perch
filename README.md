@@ -268,6 +268,7 @@ secret values and managed-service credentials either way.
 | `perch doctor` | Validate Docker, Python, and port prerequisites. |
 | `perch up` | Initialize if needed, then reconcile and expose. |
 | `perch init` | Write a starter `perch.yaml`. |
+| `perch validate` | Check the manifest's structure (no Docker needed). CI-friendly; exits non-zero on problems. |
 | `perch plan` | Show the diff between manifest and what's running. No changes applied. |
 | `perch apply [--rebuild]` | Reconcile: build changed sources, recreate changed configs, restart stopped services. |
 | `perch status` | List services and health. |
@@ -392,10 +393,11 @@ perch/
   supplychain.py     C12 image digest pinning + registry allow-list
 install.sh           prerequisite-checking installer
 THREAT_MODEL.md      controls C1-C12, trust boundaries, adversaries, residuals
-examples/hello-web/  reference application
+examples/hello-web/      reference application
+examples/secure-agent/   worked agent example + runnable demo assistant (replace with yours)
 design/              console design source
-tests/               offline tests (no Docker required)
-.github/workflows/   CI (runs the test suite on 3.10-3.12)
+tests/               offline suite (no Docker) + e2e_gateway.py / docker_gateway_check.py (integration)
+.github/workflows/   CI: offline suite on 3.10-3.12 (both crypto backends) + Docker integration job
 ```
 
 ## License
