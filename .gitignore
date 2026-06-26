@@ -20,3 +20,11 @@ CLAUDE.md
 *.code-workspace
 .DS_Store
 Thumbs.db
+# Secrets / env (commit only .env.example, never a real .env or key file)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.keystore
