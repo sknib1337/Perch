@@ -1772,6 +1772,88 @@ def test_validate_flags_invalid_mcp_policy():
     assert any("invalid mcp policy" in p for p in Manifest("p", [s]).validate())
 
 
+# ---- perch share: LAN sharing helpers (perch/share.py, proxy, doctor) -------
+from perch import share as sharemod  # noqa: E402
+
+
+def test_share_allocate_port_stable_and_skips_used():
+    assert sharemod.allocate_port({}) == sharemod.SHARE_BASE
+    assert sharemod.allocate_port({"web": 8100, "api": 8101}) == 8102
+    try:
+        sharemod.allocate_port({f"s{i}": p for i, p in
+                                enumerate(range(sharemod.SHARE_BASE, sharemod.SHARE_MAX + 1))})
+        assert False, "exhausted range must fail loud"
+    except ValueError:
+        pass
+
+
+def test_share_caddyfile_port_block_and_backcompat():
+    from perch import proxy as proxymod
+    m = Manifest("p", [svc("web", port=8080, route=Route(host="web.localhost"))])
+    base = proxymod.caddyfile(m)
+    assert proxymod.caddyfile(m, None) == base          # no shares -> byte-identical
+    shared = proxymod.caddyfile(m, {"web": 8100})
+    assert "http://:8100 {" in shared and "reverse_proxy perch-p-web:8080" in shared
+    # a share for a missing/portless service is skipped, not an error
+    assert "8101" not in proxymod.caddyfile(m, {"ghost": 8101})
+
+
+def test_share_classify_matrix_distinguishes_failure_modes():
+    ok, _ = sharemod.classify(True, True, False)
+    assert ok == "REACHABLE"
+    wsl_status, wsl_msg = sharemod.classify(False, True, True)
+    fw_status, fw_msg = sharemod.classify(False, True, False)
+    other_status, _ = sharemod.classify(False, False, False)
+    assert "WSL" in wsl_status and "portproxy" in wsl_msg      # different fixes,
+    assert "Firewall" in fw_status and "--fix" in fw_msg       # different messages
+    assert wsl_msg != fw_msg and other_status.startswith("BLOCKED")
+
+
+def test_share_firewall_rule_scoped_to_private_domain_never_public():
+    spec = sharemod.firewall_rule_spec(8100)
+    assert "-LocalPort 8100" in spec and "-Direction Inbound" in spec
+    assert "-Profile Domain,Private" in spec and "Public" not in spec.replace(
+        "Domain,Private", "")
+
+
+def test_share_policy_merge_disabled_detection():
+    assert sharemod.policy_merge_disabled(read=lambda p, n: 0)          # GPO disables
+    assert not sharemod.policy_merge_disabled(read=lambda p, n: 1)      # explicit on
+    assert not sharemod.policy_merge_disabled(read=lambda p, n: None)   # no policy
+    # only Domain/Private profiles considered
+    calls = []
+    sharemod.policy_merge_disabled(read=lambda p, n: calls.append(p))
+    assert set(calls) == {"DomainProfile", "StandardProfile"}
+
+
+def test_share_cli_validation_fails_before_docker():
+    import tempfile as _tf
+    from perch.cli import main
+    d = _tf.mkdtemp()
+    path = os.path.join(d, "perch.yaml")
+    with open(path, "w") as f:
+        f.write("project: p\nservices:\n  - name: worker\n    type: agent\n"
+                "    build: { context: ./x }\n")
+    for argv, needle in ((["-f", path, "share", "nosuch"], "no service named"),
+                         (["-f", path, "share", "worker"], "has no `port:`")):
+        try:
+            main(argv); assert False, f"{argv} must exit"
+        except SystemExit as e:
+            assert needle in str(e.code)
+
+
+def test_doctor_runtime_flavor_matrix():
+    from perch.cli import _runtime_flavor
+    assert "Desktop" in _runtime_flavor("Docker Desktop 4.30", "5.15.146")
+    assert "paid license" in _runtime_flavor("Docker Desktop 4.30", "x")
+    assert _runtime_flavor("Podman Engine", "x").startswith("Podman")
+    wsl = _runtime_flavor("Docker Engine - Community", "5.15.153.1-microsoft-standard-WSL2")
+    assert "WSL2" in wsl and "license-free" in wsl
+    plain = _runtime_flavor("Docker Engine - Community", "6.8.0-generic")
+    assert plain == "Docker Engine (license-free)"
+    assert "license-free" in _runtime_flavor("", "")            # unknown fails safe
+
+
 # ---- integration: the flagship example composes C1 + C8 + C9 + C11 ----------
 def test_secure_agent_example_composes_all_controls():
     """The flagship example manifest, as written on disk, wires per-agent identity +

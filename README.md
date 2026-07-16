@@ -81,6 +81,39 @@ To watch everything in a dashboard, run `perch serve` and open
 
 ---
 
+## Sharing with teammates on your network
+
+A `route.host` like `web.localhost` only resolves on **your** machine; a teammate
+who types it gets nothing. To hand them a URL that actually works:
+
+```bash
+perch share web
+#   web -> http://192.168.1.42:8100    (HTTP on your LAN; HTTPS options are in the docs)
+#   REACHABLE -- verified from this machine's LAN address; the final check is a teammate's browser
+```
+
+`perch share` publishes the service through the built-in proxy on a dedicated port,
+prints the LAN URL, and **verifies it with a real probe** instead of assuming it
+worked. When the probe fails it tells you why, and the failure modes differ:
+
+- **Windows Firewall** blocks inbound connections by default. Run
+  `perch share web --fix` from an **elevated** PowerShell: Perch adds a rule scoped
+  to Domain/Private profiles only (never Public), then re-probes and claims success
+  only if traffic actually flows. On IT-managed machines where Group Policy ignores
+  local firewall rules, Perch detects that and prints the exact rule spec to hand
+  to IT instead of pretending it worked.
+- **WSL2 NAT**: if your containers run inside WSL2, the Windows host must forward
+  the port (WSL mirrored networking, or `netsh interface portproxy`). The probe
+  distinguishes this from a firewall block because the fixes differ.
+
+Sharing is plain HTTP on your LAN in v1 and the output says so. A quick word of
+honesty: a workstation is a fine way to demo and share work-in-progress with the
+team, but it sleeps, reboots for patches, and lives outside your IT's backup and
+monitoring. When an app becomes something people rely on, move it to a small
+always-on VM: same `perch.yaml`, same commands, different host.
+
+---
+
 ## What you can run
 
 **Workloads**
@@ -275,6 +308,7 @@ secret values and managed-service credentials either way.
 | `perch logs <service> [-f]` | Stream service logs. |
 | `perch drift` | Read-only posture report (non-zero exit on drift). |
 | `perch run <service>` | Execute a one-shot run of a service. |
+| `perch share <service> [--fix]` | Give teammates a working LAN URL (verified by a real probe; `--fix` adds the Windows firewall rule and re-checks). |
 | `perch proxy` | Generate the Caddy config and run the reverse proxy (automatic TLS). |
 | `perch scheduler` | Foreground loop: cron-scheduled agents and managed-service backups. |
 | `perch backup [service]` | Dump managed Postgres services (retention applied). |
