@@ -149,14 +149,31 @@ appropriate to how much it matters, without reinventing DNS or cert distribution
   malformed; thin foreground socket loop). Announces `<service>.local`; documented
   as a fallback because corporate networks commonly block mDNS across VLANs.
 
-## Backlog (groomed order, not in sprint)
+## Sprint 3 (closed): backlog cleanup, everything remaining
 
-| Item | Why not now | Size |
-|---|---|---|
-| Zero-flag help polish (bare `perch` and subcommands lead with examples) | Real, but doesn't serve this sprint's goal | S |
-| `perch validate` YAML 1.1 coercion warnings (Norway problem) | Nice hardening, unrelated to sharing | S |
-| Full "graduate to a VM" guide | Stub lands in US4; full guide after share exists | S |
-| Real-Docker composed `apply()` e2e (from usability Sprint 1) | Needs a Docker host; unrelated to this epic | M |
+- **Example-led bare command shipped.** `perch` with no arguments prints three
+  concrete starting commands (doctor / up / share) and where to find the rest,
+  instead of an argparse error.
+- **YAML 1.1 coercion warnings shipped.** `perch validate` flags env keys/values
+  that parsed as bool/int/float (the "Norway problem": unquoted `no`/`off`/`on`/
+  `yes` and bare numbers) and says to quote them, naming the coerced value.
+- **Graduate-to-a-VM guide shipped.** `docs/GRADUATE_TO_A_VM.md`: when to
+  graduate, provisioning, moving `.perch` state/master key/backups, restore, DNS
+  options, decommissioning the workstation copy (including removing the share
+  firewall rules). Linked from README and GETTING_STARTED 4b.
+- **Composed `apply()` e2e shipped.** `tests/compose_e2e.py` runs one real
+  `Reconciler.apply()` on the CI Docker host and asserts the composition the
+  secure-agent example promises: agent + egress sidecar + gateway sidecar all
+  running, agent on the internal network only, identity subject/gateway env/token
+  injected, gateway answering over the internal net, a denied tool call returning
+  -32001, and the decision landing in the host-side audit spool. Runs in the CI
+  integration job (needs a daemon, so not in the offline suite).
+
+## Backlog
+
+Empty. The epic is complete; new work starts with a new grooming pass
+(candidates: real-world feedback from using `perch share` at work, the parked
+public-release track, and THREAT_MODEL residuals).
 
 ## Solo retro (closed 2026-07-16, PR #5 squash-merged as e6273ed)
 

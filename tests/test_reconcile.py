@@ -1928,6 +1928,44 @@ def test_mdns_fails_closed():
     assert mdns.answer(b"", names) is None
 
 
+# ---- backlog cleanup: example-led bare command + YAML 1.1 coercion warnings --
+def test_bare_perch_prints_examples_not_error():
+    import io, contextlib
+    from perch.cli import main
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = main([])
+    out = buf.getvalue()
+    assert rc == 0
+    assert "perch doctor" in out and "perch up" in out and "perch share" in out
+    assert "--help" in out                       # points at the full list
+
+
+def test_validate_flags_yaml_coercion_norway_problem():
+    import tempfile as _tf
+    d = _tf.mkdtemp()
+    path = os.path.join(d, "perch.yaml")
+    with open(path, "w") as f:
+        f.write("project: p\nservices:\n"
+                "  - name: web\n    type: webapp\n    image: acme/a:1\n    port: 8080\n"
+                "    env:\n"
+                "      - { key: COUNTRY, value: no }\n"        # YAML 1.1 -> False
+                "      - { key: RETRIES, value: 3 }\n"         # -> int
+                "      - { key: SAFE, value: \"no\" }\n")      # quoted -> str, fine
+    probs = Manifest.load(path).validate()
+    coercion = [p for p in probs if "coerces" in p]
+    assert len(coercion) == 2, probs
+    assert any("COUNTRY" not in p and "False" in p for p in coercion)  # names the value
+    assert any("3" in p for p in coercion)
+    assert not any("SAFE" in p for p in probs)
+    # a fully quoted manifest stays clean
+    with open(path, "w") as f:
+        f.write("project: p\nservices:\n"
+                "  - name: web\n    type: webapp\n    image: acme/a:1\n    port: 8080\n"
+                "    env:\n      - { key: COUNTRY, value: \"no\" }\n")
+    assert Manifest.load(path).validate() == []
+
+
 def test_doctor_runtime_flavor_matrix():
     from perch.cli import _runtime_flavor
     assert "Desktop" in _runtime_flavor("Docker Desktop 4.30", "5.15.146")

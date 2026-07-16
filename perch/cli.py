@@ -591,11 +591,28 @@ def cmd_mcp_config(args) -> int:
     return 0
 
 
+# Example-led entry point: most users never read a full option list, so a bare
+# `perch` shows the three commands that matter and where to go next, not an error.
+_EXAMPLES = """\
+perch -- host your own apps and agents on Docker.
+
+Start here:
+  perch doctor                # check everything's ready (names your runtime)
+  perch up                    # bring perch.yaml online (writes a starter if missing)
+  perch share web             # give teammates a working LAN URL, verified
+
+Then:
+  perch validate              # check the manifest (no Docker needed)
+  perch status                # what's running
+  perch --help                # every command
+"""
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="perch", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("-f", "--file", default="perch.yaml")
-    sub = p.add_subparsers(dest="cmd", required=True)
+    sub = p.add_subparsers(dest="cmd", required=False)
 
     sub.add_parser("init").add_argument("--force", action="store_true")
     su = sub.add_parser("up", help="set up if needed, then bring everything online")
@@ -642,6 +659,9 @@ def main(argv: list[str] | None = None) -> int:
     smc.add_argument("service")
 
     args = p.parse_args(argv)
+    if not args.cmd:
+        print(_EXAMPLES, end="")
+        return 0
     dispatch = {
         "init": cmd_init, "up": cmd_up, "doctor": cmd_doctor,
         "validate": cmd_validate,

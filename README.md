@@ -120,7 +120,8 @@ A quick word of honesty: a workstation is a fine way to demo and share
 work-in-progress with the team, but it sleeps, reboots for patches, and lives
 outside your IT's backup and monitoring. When an app becomes something people rely
 on, move it to a small always-on VM: same `perch.yaml`, same commands, different
-host.
+host. The step-by-step migration (state, backups, DNS, decommissioning) is in
+[docs/GRADUATE_TO_A_VM.md](docs/GRADUATE_TO_A_VM.md).
 
 ---
 
@@ -420,7 +421,9 @@ perch/
   api.py             HTTP API for the web console (stdlib; secrets masked; token auth)
   web/index.html     single-page command center
   reconcile.py       backend-agnostic plan / apply / drift, bindings + ordering
-  proxy.py           Caddy configuration generation
+  proxy.py           Caddy configuration generation (routes + LAN share blocks)
+  share.py           LAN sharing: probes, firewall fix, Tailscale Serve helpers
+  mdns.py            stdlib mDNS responder for `perch share --mdns` (.local names)
   cli.py             operator commands + scheduler + serve
   # --- secure-by-default agent runtime (opt-in; see THREAT_MODEL.md) ---
   identity.py        C2  per-agent cryptographic identity (HMAC -> Ed25519)
@@ -439,6 +442,7 @@ install.sh           prerequisite-checking installer
 THREAT_MODEL.md      controls C1-C12, trust boundaries, adversaries, residuals
 examples/hello-web/      reference application
 examples/secure-agent/   worked agent example + runnable demo assistant (replace with yours)
+docs/                research, sprint backlogs, and the graduate-to-a-VM guide
 design/              console design source
 tests/               offline suite (no Docker) + e2e_gateway.py / docker_gateway_check.py (integration)
 .github/workflows/   CI: offline suite on 3.10-3.12 (both crypto backends) + Docker integration job

@@ -191,7 +191,10 @@ this is a fallback rather than the default.
 **Scope honestly stated:** a workstation is a stopgap for demos and
 work-in-progress. It sleeps, reboots for updates, and sits outside IT's backup and
 monitoring. When teammates start relying on an app, graduate it to a small
-always-on VM (Section 5): the same `perch.yaml` and commands work unchanged.
+always-on VM: the same `perch.yaml` and commands work unchanged. The step-by-step
+migration (state, backups, DNS, decommissioning the workstation copy) is in
+[docs/GRADUATE_TO_A_VM.md](docs/GRADUATE_TO_A_VM.md); Section 5 covers the
+public-internet variant.
 
 ---
 
