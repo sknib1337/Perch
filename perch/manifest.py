@@ -349,6 +349,17 @@ class Manifest:
             # a webapp that wants a URL needs a port to proxy to
             if s.type == "webapp" and s.route.host and not s.port:
                 problems.append(f"{s.name}: route.host set but no `port:` to proxy to")
+            # YAML 1.1 coercion traps (the "Norway problem"): unquoted no/off/on/yes
+            # parse as booleans and bare numbers as int/float, so `value: no`
+            # silently becomes False and would crash (or lie) at apply time. Catch
+            # it here, where "quote it" is an obvious fix.
+            for e in s.env:
+                for part, v in (("key", e.key), ("value", e.value)):
+                    if not isinstance(v, str):
+                        problems.append(
+                            f"{s.name}: env {part} {v!r} parsed as "
+                            f"{type(v).__name__}, not text -- YAML coerces unquoted "
+                            f"no/off/on/yes and bare numbers; quote it")
             # opt-in security blocks must compile to a usable policy
             for label, build in (("mcp", s.mcp_policy), ("egress", lambda: s.egress_policy),
                                  ("verify", s.supply_chain_policy)):

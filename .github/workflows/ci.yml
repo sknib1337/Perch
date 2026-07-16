@@ -30,6 +30,8 @@ jobs:
         run: python tests/e2e_gateway.py
       - name: C9 gateway Docker launch check (real container)
         run: python tests/docker_gateway_check.py
+      - name: composed apply() e2e (identity + egress + mcp via one apply)
+        run: python tests/compose_e2e.py
 
   windows:
     runs-on: windows-latest         # perch share targets work Windows PCs
