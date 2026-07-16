@@ -11,6 +11,7 @@ perch -- a tiny, friendly way to host your own apps and agents.
   perch logs <service> [-f]          # tail a service
   perch drift                        # read-only posture check (exits 2 on drift)
   perch run <service>                # one-shot run (handy for agents)
+  perch share <service> [--fix]      # give teammates a working LAN URL, verified
   perch proxy                        # generate + run the HTTPS reverse proxy
   perch scheduler                    # foreground loop: cron agents + scheduled backups
   perch backup [service]             # dump managed postgres service(s)
@@ -23,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import socket
 import subprocess
@@ -169,31 +171,121 @@ def cmd_run(args) -> int:
     return code
 
 
-def cmd_proxy(args) -> int:
-    m = _load(args.file)
-    if not has_routes(m):
-        print("no services define route.host -- nothing to proxy.")
-        return 0
+_SHARES_KEY = "_shares"        # State: service name -> LAN share port (perch share)
+
+
+def _shares(m) -> dict:
+    from .state import State
+    raw = State().get(_SHARES_KEY, {}) or {}
+    # keep only shares whose service still exists with a port (manifest may change)
+    by_name = m.by_name()
+    return {n: p for n, p in raw.items() if by_name.get(n) and by_name[n].port}
+
+
+def _run_proxy(m, shares: dict) -> None:
+    """(Re)create the Caddy proxy container: hostname routes plus one published
+    port per active share, so shared services survive a proxy restart."""
     out = Path("Caddyfile")
-    out.write_text(caddyfile(m))
-    print(f"wrote {out}")
-    if args.generate_only:
-        return 0
+    out.write_text(caddyfile(m, shares))
     net = DockerBackend().ensure_network(m.project)
     subprocess.run(["docker", "rm", "-f", f"perch-{m.project}-proxy"], capture_output=True)
+    publish = ["-p", "80:80", "-p", "443:443"]
+    for port in sorted(shares.values()):
+        publish += ["-p", f"{port}:{port}"]
     subprocess.run([
         "docker", "run", "-d", "--name", f"perch-{m.project}-proxy",
         "--network", net, "--restart", "unless-stopped",
         "--label", "perch.managed=true",
         "--label", f"perch.project={m.project}",
         "--label", "perch.service=proxy",
-        "-p", "80:80", "-p", "443:443",
+        *publish,
         "-v", f"{out.resolve()}:/etc/caddy/Caddyfile:ro",
         "-v", f"perch-{m.project}-caddy-data:/data",
         "caddy:2",
     ], check=True)
-    print("proxy running on :80 and :443")
+
+
+def cmd_proxy(args) -> int:
+    m = _load(args.file)
+    shares = _shares(m)
+    if not has_routes(m) and not shares:
+        print("no services define route.host -- nothing to proxy.")
+        return 0
+    out = Path("Caddyfile")
+    out.write_text(caddyfile(m, shares))
+    print(f"wrote {out}")
+    if args.generate_only:
+        return 0
+    _run_proxy(m, shares)
+    ports = ":80 and :443" + (f" (+ shares {sorted(shares.values())})" if shares else "")
+    print(f"proxy running on {ports}")
     return 0
+
+
+def cmd_share(args) -> int:
+    """Share a webapp with teammates on the LAN: publish it through the proxy on a
+    dedicated port, print the URL they can actually open (never *.localhost, which
+    only resolves on this machine), then VERIFY it with a real probe on the
+    non-loopback address instead of assuming it worked."""
+    from . import share as share_mod
+    from .state import State
+    m = _load(args.file)
+    svc = m.by_name().get(args.service)
+    if svc is None:
+        sys.exit(f"no service named {args.service!r} in {args.file}")
+    if not svc.port:
+        sys.exit(f"service {args.service!r} has no `port:` -- nothing to share")
+    st = State()
+    shares = st.get(_SHARES_KEY, {}) or {}
+    port = args.port or shares.get(svc.name) or share_mod.allocate_port(shares)
+    shares[svc.name] = port
+    st.put(_SHARES_KEY, shares)
+    _run_proxy(m, _shares(m))
+    ip = share_mod.lan_ip()
+    if not ip:
+        print(f"shared {svc.name} on port {port}, but this machine has no "
+              "non-loopback address -- are you connected to a network?")
+        return 1
+    print(f"  {svc.name} -> http://{ip}:{port}    (HTTP on your LAN; HTTPS options "
+          "are in the docs)")
+    ok = share_mod.probe(ip, port)
+    status, guidance = share_mod.classify(ok, os.name == "nt", share_mod.in_wsl())
+    print(f"  {status} -- {guidance}")
+    if ok:
+        return 0
+    if args.fix:
+        if os.name != "nt":
+            print("  --fix automates Windows Firewall rules only; on this OS check "
+                  "your firewall manually.")
+            return 1
+        return _share_fix(share_mod, ip, port)
+    return 1
+
+
+def _share_fix(share_mod, ip: str, port: int) -> int:
+    """The verified firewall fix: elevation check first (a non-admin who triggers
+    the Windows prompt gets a BLOCK rule created no matter what they click), then
+    create the scoped rule, then RE-PROBE -- success is claimed only when traffic
+    actually flows. On GPO-managed machines where local rules are ignored, hand the
+    user the exact rule spec for IT instead of pretending it worked."""
+    if not share_mod.is_admin():
+        print("  --fix needs an elevated shell. Re-run from an elevated PowerShell:")
+        print(f"    perch share <service> --fix")
+        return 1
+    print(f"  adding firewall rule: {share_mod.firewall_rule_spec(port)}")
+    created = share_mod.add_firewall_rule(port)
+    if created and share_mod.probe(ip, port):
+        print("  REACHABLE -- firewall rule added and verified.")
+        return 0
+    if share_mod.policy_merge_disabled():
+        print("  The rule was created but CANNOT take effect: Group Policy disables "
+              "local firewall rules on this managed machine. Ask IT to deploy:")
+        print(f"    {share_mod.firewall_rule_spec(port)}")
+    else:
+        print("  Still blocked after adding the rule. Check the active network "
+              "profile (the rule is scoped to Domain/Private; Public blocks by "
+              "design) and any third-party firewall.")
+    return 1
 
 
 def _backup_one(backend: DockerBackend, m, svc) -> None:
@@ -298,6 +390,35 @@ def _port_free(port: int) -> bool:
         s.close()
 
 
+def _runtime_flavor(platform_name: str, kernel: str) -> str:
+    """Name the container runtime behind the docker CLI, because on a work machine
+    the difference is a licensing question: Docker Desktop needs a paid subscription
+    at organizations with 250+ employees or $10M+ revenue, while Docker Engine
+    (including inside WSL2) and Podman are license-free at any size. Pure, so the
+    classification matrix is offline-testable."""
+    p, k = (platform_name or "").lower(), (kernel or "").lower()
+    if "podman" in p:
+        return "Podman (license-free)"
+    if "desktop" in p:
+        return ("Docker Desktop (paid license required at orgs with 250+ employees "
+                "or $10M+ revenue)")
+    if "microsoft" in k:
+        return "Docker Engine in WSL2 (license-free)"
+    return "Docker Engine (license-free)"
+
+
+def _docker_install_fix() -> str:
+    if os.name == "nt":
+        wsl_note = ("" if shutil.which("wsl")
+                    else "enable WSL first (`wsl --install`, reboot), then ")
+        return ("License-free path (recommended on work PCs): " + wsl_note +
+                "install Docker Engine inside your WSL2 distro -- see "
+                "GETTING_STARTED.md. Docker Desktop also works but requires a paid "
+                "subscription at orgs with 250+ employees or $10M+ revenue.")
+    return ("Run: curl -fsSL https://get.docker.com | sh   (Linux), or install "
+            "Docker Desktop / Podman on macOS.")
+
+
 def cmd_doctor(args) -> int:
     """Plain-English check that everything Perch needs is in place."""
     ok = True
@@ -315,14 +436,26 @@ def cmd_doctor(args) -> int:
           "Install a newer Python from python.org, then reinstall Perch.")
 
     has_docker = shutil.which("docker") is not None
-    check("Docker is installed", has_docker,
-          "Install Docker Desktop (Mac/Windows) or run: curl -fsSL https://get.docker.com | sh  (Linux)")
+    has_podman = shutil.which("podman") is not None
+    label = "A container runtime is installed"
+    if not has_docker and has_podman:
+        label += " (podman found; point the docker CLI at its compatibility socket)"
+    check(label, has_docker or has_podman, _docker_install_fix())
 
     daemon = False
+    flavor = ""
     if has_docker:
-        daemon = subprocess.run(["docker", "info"], capture_output=True).returncode == 0
-    check("Docker is running", daemon,
-          "Open Docker Desktop and wait for it to say 'running', then try again.")
+        r = subprocess.run(
+            ["docker", "version", "--format",
+             "{{.Server.Platform.Name}}|{{.Server.KernelVersion}}"],
+            capture_output=True, text=True)
+        daemon = r.returncode == 0
+        if daemon:
+            name, _, kernel = r.stdout.strip().partition("|")
+            flavor = _runtime_flavor(name, kernel)
+    check("Docker is running" + (f" -- {flavor}" if flavor else ""), daemon,
+          "Start the engine (Docker Desktop, or `sudo service docker start` "
+          "inside WSL2), then try again.")
 
     p80, p443 = _port_free(80), _port_free(443)
     check("Port 80 is free (for the web address)", p80,
@@ -419,6 +552,13 @@ def main(argv: list[str] | None = None) -> int:
     sl = sub.add_parser("logs"); sl.add_argument("service"); sl.add_argument("-f", "--follow", action="store_true")
     sub.add_parser("drift")
     sr = sub.add_parser("run"); sr.add_argument("service")
+    ssh = sub.add_parser("share",
+                         help="share a service with teammates on the LAN (verified URL)")
+    ssh.add_argument("service")
+    ssh.add_argument("--port", type=int, default=None,
+                     help="host port to share on (default: auto from 8100)")
+    ssh.add_argument("--fix", action="store_true",
+                     help="Windows: add the scoped firewall rule and re-verify")
     spx = sub.add_parser("proxy"); spx.add_argument("--generate-only", action="store_true")
     sub.add_parser("scheduler")
     sbk = sub.add_parser("backup", help="dump managed postgres services")
@@ -439,7 +579,8 @@ def main(argv: list[str] | None = None) -> int:
         "init": cmd_init, "up": cmd_up, "doctor": cmd_doctor,
         "validate": cmd_validate,
         "plan": cmd_plan, "apply": cmd_apply, "status": cmd_status,
-        "logs": cmd_logs, "drift": cmd_drift, "run": cmd_run, "proxy": cmd_proxy,
+        "logs": cmd_logs, "drift": cmd_drift, "run": cmd_run, "share": cmd_share,
+        "proxy": cmd_proxy,
         "scheduler": cmd_scheduler, "backup": cmd_backup, "restore": cmd_restore,
         "serve": cmd_serve, "destroy": cmd_destroy, "mcp-config": cmd_mcp_config,
     }

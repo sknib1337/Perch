@@ -30,3 +30,16 @@ jobs:
         run: python tests/e2e_gateway.py
       - name: C9 gateway Docker launch check (real container)
         run: python tests/docker_gateway_check.py
+
+  windows:
+    runs-on: windows-latest         # perch share targets work Windows PCs
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install pyyaml
+      - name: offline suite on Windows (stdlib backend)
+        run: python tests/test_reconcile.py
+        env: { PERCH_CRYPTO_BACKEND: stdlib }
+      - name: share plumbing check (real firewall rule + probe; runner is admin)
+        run: python tests/windows_share_check.py

@@ -22,14 +22,41 @@ The operational loop is: edit `perch.yaml` → run `perch up` → verify with
 
 ## 1. Prerequisites
 
-1. **Docker Engine.**
-   - macOS / Windows: install Docker Desktop (`https://www.docker.com/products/docker-desktop/`)
-     and start it.
+1. **A container runtime.**
    - Linux: `curl -fsSL https://get.docker.com | sh`
+   - Windows (work machine): see the license-free WSL2 path below. Docker Desktop
+     also works, but it **requires a paid subscription at organizations with 250+
+     employees or $10M+ annual revenue** (and all government entities), so do not
+     assume it is available on a corporate PC.
+   - macOS: Docker Desktop (same licensing caveat) or Podman.
 2. **Python 3.10+.** Confirm with `python3 --version`.
 
 Docker runs each workload in an isolated container. Perch drives Docker; no
 direct Docker operation is required during normal use.
+
+### Windows without Docker Desktop (license-free)
+
+Docker's license terms cover only the Docker Desktop product; the open-source
+Docker Engine is Apache-2.0 and free at any company size, and it runs directly
+inside WSL2:
+
+```powershell
+wsl --install          # once; reboot if prompted
+```
+
+Then inside the WSL2 distro (Ubuntu shown):
+
+```bash
+echo -e "[boot]\nsystemd=true" | sudo tee /etc/wsl.conf   # then: wsl --shutdown, reopen
+curl -fsSL https://get.docker.com | sh
+sudo usermod -aG docker $USER                             # re-open the shell after
+```
+
+Run Perch **inside the same WSL2 distro** so the CLI and the engine share one
+environment. `perch doctor` names the runtime it detected (Docker Desktop, Docker
+Engine in WSL2, or Podman) so you can confirm which path you are on. Note: WSL2's
+NAT means teammates cannot reach a WSL-hosted port until the Windows host forwards
+it; `perch share` detects and explains that case (see section 4b).
 
 ---
 
@@ -103,6 +130,38 @@ perch up          # build and reconcile
 ```
 
 Perch rebuilds only what changed. Iterate with edit → `perch up`.
+
+---
+
+## 4b. Share with teammates on the office network
+
+`route.host` names like `web.localhost` resolve only on your own machine. To give
+a teammate a URL that works from their browser:
+
+```bash
+perch share web
+```
+
+This publishes the service through the proxy on a dedicated port, prints
+`http://<your-LAN-IP>:<port>`, and verifies it with a real probe on the
+non-loopback address. The result line is honest: `REACHABLE`, or `BLOCKED` with
+the specific cause and fix:
+
+- **Windows Firewall** (inbound is blocked by default): run
+  `perch share web --fix` from an **elevated** PowerShell. Perch adds a rule
+  scoped to the Domain/Private profiles only (never Public), re-probes, and only
+  claims success when traffic flows. If Group Policy on a managed machine ignores
+  local rules, Perch says so and prints the exact rule spec to hand to IT.
+- **WSL2 NAT** (containers inside WSL2): the Windows host must forward the port.
+  Enable WSL mirrored networking (`.wslconfig`: `networkingMode=mirrored`,
+  Windows 11 22H2+) or add a portproxy as printed in the message.
+- Sharing is plain HTTP on the LAN and the output says so; the final check is a
+  teammate actually opening the URL.
+
+**Scope honestly stated:** a workstation is a stopgap for demos and
+work-in-progress. It sleeps, reboots for updates, and sits outside IT's backup and
+monitoring. When teammates start relying on an app, graduate it to a small
+always-on VM (Section 5): the same `perch.yaml` and commands work unchanged.
 
 ---
 
