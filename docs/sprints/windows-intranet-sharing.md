@@ -1,0 +1,148 @@
+# Epic: Share from a work Windows PC
+
+A developer on a corporate Windows workstation hosts AI-built webapps with Perch and
+teammates on the same network open them in a browser. Grounded in
+[docs/RESEARCH_windows-intranet-sharing.md](../RESEARCH_windows-intranet-sharing.md).
+
+Decisions locked for this epic:
+- **Runtime**: license-free first. Docker Engine inside WSL2 is the recommended
+  corporate path; Docker Desktop is documented as a licensing risk, never assumed.
+- **Transport default (deliberate, revisit-able)**: `perch share` v1 serves HTTP on
+  the LAN and says so honestly in its output. HTTPS options ship as a later story
+  once the intranet-cert open question is researched. Do not silently default.
+- **Design rule**: never fire-and-forget. Every environment mutation (firewall rule,
+  portproxy) is verified by an actual probe, and failure states name who can fix
+  them ("ask IT to deploy this rule").
+
+---
+
+## Sprint 1
+
+**Sprint Goal:** A teammate on the same LAN can open a Perch-hosted webapp by
+visiting a URL that one Perch command printed and verified.
+
+### US1: Doctor recognizes license-free runtimes
+
+**As a** developer on a corporate Windows PC, **I want** `perch doctor` to detect a
+license-free container runtime (Docker Engine in WSL2, Podman) **so that** I can run
+Perch at work without a Docker Desktop subscription my employer doesn't have.
+
+INVEST: Independent (pure detection + messaging). Negotiable (which runtimes rank
+first). Valuable (unblocks corporate install). Estimable. Small enough. Testable
+with fakes offline + a WSL job note.
+
+Acceptance criteria:
+- Given a machine where `docker info` succeeds via any engine (Desktop, WSL2
+  docker-ce, Podman's docker-compatible socket), When `perch doctor` runs, Then the
+  Docker check passes and names the detected runtime.
+- Given a Windows machine with no runtime at all, When `perch doctor` runs, Then the
+  fix text offers the license-free WSL2 Docker Engine path first and mentions Docker
+  Desktop with its 250-employee/$10M licensing caveat, instead of recommending
+  Desktop unconditionally.
+- Given WSL is present but no engine is installed inside it, When `perch doctor`
+  runs, Then the output includes the two-line WSL2 install pointer (docs link), not
+  a generic failure.
+- Given the offline test suite, When it runs on both crypto backends, Then new
+  detection logic is covered by fakes and the suite passes with no Docker present.
+
+Size: **M**
+
+### US2: `perch share` prints and verifies a teammate-reachable URL
+
+**As a** developer hosting a webapp with Perch, **I want** one command that tells me
+the exact URL my teammates can open, verified by a real reachability probe, **so
+that** sharing doesn't end with "works on my machine" and a `.localhost` link that
+only works for me.
+
+INVEST: Independent of US3 (it reports honestly even when the firewall blocks; US3
+automates the fix). Valuable on its own (the demo moment). Estimable. Small enough
+once firewall automation is split out. Testable via loopback vs non-loopback probes.
+
+Acceptance criteria:
+- Given a routed service running, When I run `perch share <service>`, Then it prints
+  `http://<LAN-IP>[:port]` (the host's non-loopback address), never a `*.localhost`
+  name, and labels the transport honestly ("HTTP on your LAN").
+- Given the printed URL, When `perch share` probes it from the host's own
+  non-loopback address, Then it reports REACHABLE or BLOCKED as an explicit result
+  line, and BLOCKED names the likely cause (Windows Firewall inbound default) and
+  points at US3's fix path.
+- Given containers running inside WSL2 NAT (not mirrored mode), When `perch share`
+  probes, Then a Windows-LAN-blocked result distinguishes "WSL port not forwarded to
+  the Windows host" from "firewall blocked", because the fixes differ.
+- Given no service or a service with no port, When I run `perch share <service>`,
+  Then it exits non-zero with a one-line message naming what's missing.
+- Given the sprint demo (manual), When a second device on the same LAN opens the
+  printed URL, Then the app loads.
+
+Size: **L** (the WSL-NAT distinction is why; if it slips, cut the NAT diagnosis to
+a stub message and keep the probe)
+
+### US3: Firewall rule with verify, and honest failure on managed machines
+
+**As a** developer whose workstation blocks inbound traffic by default, **I want**
+Perch to create the firewall rule for my app's port and then prove it took effect,
+**so that** I'm not debugging silent blocks, and when IT policy overrides local
+rules I'm told to ask IT instead of being lied to by a "rule created" message.
+
+INVEST: depends on US2's probe (sequenced within the sprint, acceptable). Valuable
+(removes the #1 silent failure). Estimable against the researched failure modes.
+Testable on a windows-latest CI runner for rule + self-probe; GPO case unit-tested.
+
+Acceptance criteria:
+- Given `perch share` reports BLOCKED and the user confirms (or passes `--fix`),
+  When Perch creates a scoped inbound allow rule (the app's port, Private/Domain
+  profiles only, never Public), Then it re-probes and only reports success if the
+  probe now passes.
+- Given local firewall policy merge is disabled by GPO (unit-tested via injected
+  profile state), When rule creation "succeeds" but the re-probe still fails, Then
+  Perch says the rule cannot take effect on this managed machine and prints the
+  exact rule spec to hand to IT.
+- Given a non-admin shell, When `perch share --fix` runs, Then it detects missing
+  elevation up front and prints the elevated one-liner to run, rather than
+  triggering the Windows prompt trap that silently creates block rules.
+- Given CI on a windows-latest runner, When the integration job runs, Then rule
+  creation + self-probe + cleanup pass end-to-end.
+
+Size: **M**
+
+### US4: Windows quick-start docs that match reality
+
+**As a** developer reading the README at work, **I want** a Windows path that
+reflects licensing and reachability truthfully, **so that** my first hour isn't
+spent discovering Docker Desktop needs a license and `web.localhost` doesn't work
+for teammates.
+
+INVEST: all green; pure docs, testable by walkthrough.
+
+Acceptance criteria:
+- Given the README/GETTING_STARTED, When a Windows corporate user follows them, Then
+  they hit: license-free WSL2 engine install, `perch doctor`, `perch up`,
+  `perch share`, in that order, with the Docker Desktop licensing caveat visible
+  before any Desktop install suggestion.
+- Given the docs, When read end to end, Then the workstation is framed as a
+  demo/dev-sharing stopgap with a short "graduate to a small VM, same perch.yaml"
+  note (full guide stays in the backlog).
+- Given every command in the new sections, When executed against the shipped CLI,
+  Then each exists and behaves as documented.
+
+Size: **S**
+
+---
+
+## Backlog (groomed order, not in sprint)
+
+| Item | Why not now | Size |
+|---|---|---|
+| Tailscale Serve integration in `perch share` | LAN path must stand alone first; adds tailnet onboarding dependency | M |
+| Intranet HTTPS story (Caddy internal CA vs mkcert vs Tailscale certs) + recommended default | Blocked on open research question; transport decision deliberately deferred | M |
+| mDNS `app.local` fallback naming | Fallback tech; commonly VLAN-blocked at work; needs a wildcard-less naming scheme | M |
+| Zero-flag help polish (bare `perch` and subcommands lead with examples) | Real, but doesn't serve this sprint's goal | S |
+| `perch validate` YAML 1.1 coercion warnings (Norway problem) | Nice hardening, unrelated to sharing | S |
+| Full "graduate to a VM" guide | Stub lands in US4; full guide after share exists | S |
+| Real-Docker composed `apply()` e2e (from usability Sprint 1) | Needs a Docker host; unrelated to this epic | M |
+
+## Solo retro (fill at sprint close)
+
+- What actually shipped versus the Sprint Goal?
+- What slowed me down or got re-worked, and why?
+- One change to try next sprint.
