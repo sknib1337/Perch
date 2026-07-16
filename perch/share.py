@@ -33,8 +33,9 @@ _POLICY_ROOT = r"SOFTWARE\Policies\Microsoft\WindowsFirewall"
 
 def allocate_port(existing: dict, base: int = SHARE_BASE) -> int:
     """Pick the next free share port, skipping ports already allocated to other
-    services, so each service keeps a stable URL across runs."""
-    used = set(existing.values())
+    services, so each service keeps a stable URL across runs. Accepts both share
+    state shapes (bare port, or {port, https} entries)."""
+    used = {v.get("port") if isinstance(v, dict) else v for v in existing.values()}
     for port in range(base, SHARE_MAX + 1):
         if port not in used:
             return port
@@ -96,6 +97,71 @@ def classify(reachable: bool, windows: bool, wsl: bool) -> "tuple[str, str]":
     return ("BLOCKED",
             "the port did not answer on the LAN address; check the proxy is "
             "running and no host firewall is filtering it")
+
+
+def normalize_shares(raw: dict) -> dict:
+    """State shape migration: v1 stored {service: port}; v2 stores
+    {service: {port, https}}. Accept both forever -- state files outlive releases,
+    and silently dropping a share would silently unpublish someone's app."""
+    out: dict = {}
+    for name, v in (raw or {}).items():
+        if isinstance(v, dict):
+            port = v.get("port")
+            if isinstance(port, int):
+                out[name] = {"port": port, "https": bool(v.get("https", False))}
+        elif isinstance(v, int):
+            out[name] = {"port": v, "https": False}
+    return out
+
+
+# ---- Tailscale Serve (stable name + trusted TLS over the tailnet) ---------
+
+def tailscale_path() -> "str | None":
+    import shutil
+    return shutil.which("tailscale")
+
+
+def _dns_from_status(status_json: str) -> "str | None":
+    """This machine's tailnet DNS name from `tailscale status --json`. Pure parse,
+    injectable output, so the extraction is offline-testable."""
+    import json
+    try:
+        name = (json.loads(status_json).get("Self") or {}).get("DNSName") or ""
+    except (ValueError, AttributeError):
+        return None
+    return name.rstrip(".") or None
+
+
+def tailscale_dns_name() -> "str | None":
+    exe = tailscale_path()
+    if not exe:
+        return None
+    r = subprocess.run([exe, "status", "--json"], capture_output=True, text=True)
+    return _dns_from_status(r.stdout) if r.returncode == 0 else None
+
+
+def tailscale_serve(port: int) -> "tuple[bool, str]":
+    """Point Tailscale Serve at the local share port: teammates on the tailnet get
+    https://<machine>.<tailnet>.ts.net with an automatically provisioned, publicly
+    trusted certificate -- no firewall rule, no cert distribution. Returns
+    (ok, detail) rather than raising so the CLI can report the failure verbatim."""
+    exe = tailscale_path()
+    if not exe:
+        return False, "tailscale is not on PATH"
+    r = subprocess.run([exe, "serve", "--bg", str(port)],
+                       capture_output=True, text=True)
+    return r.returncode == 0, (r.stdout or r.stderr).strip()
+
+
+def tailscale_hint(available: bool) -> "str | None":
+    """One-line nudge shown when a LAN share is blocked and Tailscale is installed:
+    Serve needs no firewall change, so it is often the faster path on a locked-down
+    corporate machine. Teammates must be on the tailnet (that is the trade)."""
+    if not available:
+        return None
+    return ("tailscale detected: `perch share <service> --tailscale` shares over "
+            "your tailnet instead (trusted HTTPS, no firewall changes; teammates "
+            "must be on the tailnet)")
 
 
 # ---- Windows Firewall (US3) ----------------------------------------------
