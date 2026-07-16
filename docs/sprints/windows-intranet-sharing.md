@@ -141,8 +141,22 @@ Size: **S**
 | Full "graduate to a VM" guide | Stub lands in US4; full guide after share exists | S |
 | Real-Docker composed `apply()` e2e (from usability Sprint 1) | Needs a Docker host; unrelated to this epic | M |
 
-## Solo retro (fill at sprint close)
+## Solo retro (closed 2026-07-16, PR #5 squash-merged as e6273ed)
 
-- What actually shipped versus the Sprint Goal?
-- What slowed me down or got re-worked, and why?
-- One change to try next sprint.
+- **What actually shipped versus the Sprint Goal?** All four stories: US1 doctor
+  runtime detection (license-free-first guidance), US2 `perch share` with the
+  verified probe and WSL-NAT vs firewall distinction, US3 `--fix` with elevation
+  check / Domain-Private scoping / re-probe / GPO handoff-to-IT, US4 docs. Suite
+  went 153 to 160 on both crypto backends; a new windows CI job ran the real
+  firewall rule round-trip (create, verify via Get-NetFirewallRule, remove) on an
+  elevated runner. The Sprint Goal's final inch (a second physical device opening
+  the URL) remains the designed-in manual demo step; everything automatable was
+  automated and CI-verified.
+- **What slowed me down or got re-worked, and why?** Discovering that services are
+  never published to host ports (only the Caddy proxy is) forced the share design
+  through port-based Caddy site blocks plus extra proxy publishes, rather than a
+  simple `-p` on the service container. Cheap to absorb because it surfaced during
+  grounding reads, before code was written.
+- **One change to try next sprint.** Do the backend-topology read (who publishes
+  which ports, which nets) BEFORE grooming stories that touch networking, not
+  after; the US2 sizing would have been L-with-reason from the start.
