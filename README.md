@@ -106,11 +106,21 @@ worked. When the probe fails it tells you why, and the failure modes differ:
   the port (WSL mirrored networking, or `netsh interface portproxy`). The probe
   distinguishes this from a firewall block because the fixes differ.
 
-Sharing is plain HTTP on your LAN in v1 and the output says so. A quick word of
-honesty: a workstation is a fine way to demo and share work-in-progress with the
-team, but it sleeps, reboots for patches, and lives outside your IT's backup and
-monitoring. When an app becomes something people rely on, move it to a small
-always-on VM: same `perch.yaml`, same commands, different host.
+Three transports, in order of recommendation: plain **HTTP** (default, zero setup,
+honest about being HTTP), **`--tailscale`** (the moment an app matters: a stable
+`https://<machine>.<tailnet>.ts.net` name with a trusted certificate provisioned
+automatically and no firewall work; teammates must be on your tailnet), and
+**`--https`** (Caddy's internal CA when Tailscale isn't allowed; teammates trust
+the root cert once). `--mdns` additionally announces `web.local` as a fallback
+name (no admin rights needed, but corporate networks often block mDNS across
+VLANs). The decision matrix and cert-trust steps are in
+[GETTING_STARTED.md](GETTING_STARTED.md).
+
+A quick word of honesty: a workstation is a fine way to demo and share
+work-in-progress with the team, but it sleeps, reboots for patches, and lives
+outside your IT's backup and monitoring. When an app becomes something people rely
+on, move it to a small always-on VM: same `perch.yaml`, same commands, different
+host.
 
 ---
 

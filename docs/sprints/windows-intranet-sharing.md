@@ -129,13 +129,30 @@ Size: **S**
 
 ---
 
+## Sprint 2 (closed): backlog items 1-3, in order
+
+**Sprint Goal:** an app shared from the workstation gets a name and HTTPS story
+appropriate to how much it matters, without reinventing DNS or cert distribution.
+
+- **Item 1 shipped: `perch share --tailscale`.** Drives `tailscale serve --bg
+  <share-port>`; prints the stable `https://<machine>.<tailnet>.ts.net` URL from
+  `tailscale status --json`; honest notes (tailnet-only, first-cert delay). When a
+  plain LAN share is BLOCKED and tailscale is on PATH, the output nudges toward it.
+- **Item 2 shipped: intranet HTTPS story + `--https`.** Decision recorded (docs
+  4b): plain HTTP for quick demos; **Tailscale Serve the moment an app matters**
+  (only option with a stable name and an already-trusted cert); Caddy internal CA
+  (`--https`, `tls internal` share blocks) when Tailscale is not allowed, with the
+  root-cert trust steps documented per OS. Mutually exclusive with --tailscale by
+  validation.
+- **Item 3 shipped: `perch share --mdns`.** Stdlib-only mDNS responder
+  (perch/mdns.py: pure RFC 6762 packet encode/parse, fail-closed on anything
+  malformed; thin foreground socket loop). Announces `<service>.local`; documented
+  as a fallback because corporate networks commonly block mDNS across VLANs.
+
 ## Backlog (groomed order, not in sprint)
 
 | Item | Why not now | Size |
 |---|---|---|
-| Tailscale Serve integration in `perch share` | LAN path must stand alone first; adds tailnet onboarding dependency | M |
-| Intranet HTTPS story (Caddy internal CA vs mkcert vs Tailscale certs) + recommended default | Blocked on open research question; transport decision deliberately deferred | M |
-| mDNS `app.local` fallback naming | Fallback tech; commonly VLAN-blocked at work; needs a wildcard-less naming scheme | M |
 | Zero-flag help polish (bare `perch` and subcommands lead with examples) | Real, but doesn't serve this sprint's goal | S |
 | `perch validate` YAML 1.1 coercion warnings (Norway problem) | Nice hardening, unrelated to sharing | S |
 | Full "graduate to a VM" guide | Stub lands in US4; full guide after share exists | S |

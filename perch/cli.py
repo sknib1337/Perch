@@ -171,15 +171,16 @@ def cmd_run(args) -> int:
     return code
 
 
-_SHARES_KEY = "_shares"        # State: service name -> LAN share port (perch share)
+_SHARES_KEY = "_shares"        # State: service -> {port, https} (perch share)
 
 
 def _shares(m) -> dict:
+    from . import share as share_mod
     from .state import State
-    raw = State().get(_SHARES_KEY, {}) or {}
+    raw = share_mod.normalize_shares(State().get(_SHARES_KEY, {}) or {})
     # keep only shares whose service still exists with a port (manifest may change)
     by_name = m.by_name()
-    return {n: p for n, p in raw.items() if by_name.get(n) and by_name[n].port}
+    return {n: e for n, e in raw.items() if by_name.get(n) and by_name[n].port}
 
 
 def _run_proxy(m, shares: dict) -> None:
@@ -190,7 +191,7 @@ def _run_proxy(m, shares: dict) -> None:
     net = DockerBackend().ensure_network(m.project)
     subprocess.run(["docker", "rm", "-f", f"perch-{m.project}-proxy"], capture_output=True)
     publish = ["-p", "80:80", "-p", "443:443"]
-    for port in sorted(shares.values()):
+    for port in sorted(e["port"] for e in shares.values()):
         publish += ["-p", f"{port}:{port}"]
     subprocess.run([
         "docker", "run", "-d", "--name", f"perch-{m.project}-proxy",
@@ -217,18 +218,24 @@ def cmd_proxy(args) -> int:
     if args.generate_only:
         return 0
     _run_proxy(m, shares)
-    ports = ":80 and :443" + (f" (+ shares {sorted(shares.values())})" if shares else "")
+    share_ports = sorted(e["port"] for e in shares.values())
+    ports = ":80 and :443" + (f" (+ shares {share_ports})" if shares else "")
     print(f"proxy running on {ports}")
     return 0
 
 
 def cmd_share(args) -> int:
-    """Share a webapp with teammates on the LAN: publish it through the proxy on a
-    dedicated port, print the URL they can actually open (never *.localhost, which
-    only resolves on this machine), then VERIFY it with a real probe on the
-    non-loopback address instead of assuming it worked."""
+    """Share a webapp with teammates: publish it through the proxy on a dedicated
+    port, print the URL they can actually open (never *.localhost, which only
+    resolves on this machine), then VERIFY it with a real probe instead of assuming
+    it worked. Three transports: plain HTTP on the LAN (default, honest about it),
+    --https via Caddy's internal CA, or --tailscale for a stable tailnet name with
+    a trusted certificate and no firewall work."""
     from . import share as share_mod
     from .state import State
+    if args.tailscale and args.https:
+        sys.exit("pick one: --https (LAN, Caddy internal CA) or --tailscale "
+                 "(tailnet name with a trusted certificate)")
     m = _load(args.file)
     svc = m.by_name().get(args.service)
     if svc is None:
@@ -236,30 +243,81 @@ def cmd_share(args) -> int:
     if not svc.port:
         sys.exit(f"service {args.service!r} has no `port:` -- nothing to share")
     st = State()
-    shares = st.get(_SHARES_KEY, {}) or {}
-    port = args.port or shares.get(svc.name) or share_mod.allocate_port(shares)
-    shares[svc.name] = port
+    shares = share_mod.normalize_shares(st.get(_SHARES_KEY, {}) or {})
+    entry = shares.get(svc.name, {})
+    port = args.port or entry.get("port") or share_mod.allocate_port(shares)
+    https = bool(args.https) or bool(entry.get("https")) and not args.tailscale
+    shares[svc.name] = {"port": port, "https": https}
     st.put(_SHARES_KEY, shares)
     _run_proxy(m, _shares(m))
+
+    if args.tailscale:
+        # Tailscale Serve terminates TLS on the tailnet and forwards to the local
+        # share port; no LAN probe applies because teammates connect via the tailnet.
+        ok, detail = share_mod.tailscale_serve(port)
+        if not ok:
+            detail = detail or "is tailscale installed, up, and logged in?"
+            print(f"  tailscale serve failed: {detail}")
+            return 1
+        dns = share_mod.tailscale_dns_name()
+        url = f"https://{dns}" if dns else "https://<machine>.<tailnet>.ts.net"
+        print(f"  {svc.name} -> {url}")
+        print("  tailnet-only: teammates must be on your tailnet. The HTTPS "
+              "certificate is provisioned automatically (first run can take about "
+              "a minute).")
+        return 0
+
     ip = share_mod.lan_ip()
     if not ip:
         print(f"shared {svc.name} on port {port}, but this machine has no "
               "non-loopback address -- are you connected to a network?")
         return 1
-    print(f"  {svc.name} -> http://{ip}:{port}    (HTTP on your LAN; HTTPS options "
-          "are in the docs)")
+    scheme = "https" if https else "http"
+    note = ("HTTPS via Caddy's internal CA; teammates trust the root cert once, "
+            "see GETTING_STARTED 4b" if https
+            else "HTTP on your LAN; HTTPS options: --https or --tailscale")
+    print(f"  {svc.name} -> {scheme}://{ip}:{port}    ({note})")
     ok = share_mod.probe(ip, port)
     status, guidance = share_mod.classify(ok, os.name == "nt", share_mod.in_wsl())
     print(f"  {status} -- {guidance}")
+    if not ok:
+        hint = share_mod.tailscale_hint(share_mod.tailscale_path() is not None)
+        if hint:
+            print(f"  {hint}")
     if ok:
+        if args.mdns:
+            return _share_mdns(svc.name, ip, port, scheme)
         return 0
     if args.fix:
         if os.name != "nt":
             print("  --fix automates Windows Firewall rules only; on this OS check "
                   "your firewall manually.")
             return 1
-        return _share_fix(share_mod, ip, port)
+        rc = _share_fix(share_mod, ip, port)
+        if rc == 0 and args.mdns:
+            return _share_mdns(svc.name, ip, port, scheme)
+        return rc
     return 1
+
+
+def _share_mdns(name: str, ip: str, port: int, scheme: str) -> int:
+    """Foreground mDNS announcer: teammates open <service>.local instead of a raw
+    IP. A fallback by design -- .local needs no admin rights or DNS server, but
+    corporate networks commonly block mDNS across VLANs (docs say so)."""
+    from . import mdns
+    host = f"{name}.local"
+    print(f"  announcing {scheme}://{host}:{port} via mDNS -- most OSes resolve "
+          ".local automatically; some corporate networks block it across VLANs. "
+          "Ctrl-C to stop.")
+    try:
+        mdns.respond_forever({host: ip})
+        return 0
+    except KeyboardInterrupt:
+        return 0
+    except OSError as e:
+        print(f"  could not run the mDNS responder ({e}) -- another responder may "
+              "own port 5353 on this machine.")
+        return 1
 
 
 def _share_fix(share_mod, ip: str, port: int) -> int:
@@ -559,6 +617,15 @@ def main(argv: list[str] | None = None) -> int:
                      help="host port to share on (default: auto from 8100)")
     ssh.add_argument("--fix", action="store_true",
                      help="Windows: add the scoped firewall rule and re-verify")
+    ssh.add_argument("--https", action="store_true",
+                     help="serve over HTTPS via Caddy's internal CA "
+                          "(teammates trust the root cert once)")
+    ssh.add_argument("--tailscale", action="store_true",
+                     help="share over your tailnet via Tailscale Serve "
+                          "(stable name, trusted cert, no firewall work)")
+    ssh.add_argument("--mdns", action="store_true",
+                     help="announce <service>.local on the LAN and keep "
+                          "running (Ctrl-C to stop)")
     spx = sub.add_parser("proxy"); spx.add_argument("--generate-only", action="store_true")
     sub.add_parser("scheduler")
     sbk = sub.add_parser("backup", help="dump managed postgres services")

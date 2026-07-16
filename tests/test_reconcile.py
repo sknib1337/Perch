@@ -1842,6 +1842,88 @@ def test_share_cli_validation_fails_before_docker():
             assert needle in str(e.code)
 
 
+# ---- sharing sprint 2: tailscale, https shares, mdns -------------------------
+def test_share_normalize_shares_accepts_both_state_shapes():
+    out = sharemod.normalize_shares(
+        {"a": 8100, "b": {"port": 8101, "https": True}, "c": {"port": 8102},
+         "bad": "x", "worse": {"port": "y"}})
+    assert out == {"a": {"port": 8100, "https": False},
+                   "b": {"port": 8101, "https": True},
+                   "c": {"port": 8102, "https": False}}
+    assert sharemod.allocate_port(out) == 8103          # dict entries counted too
+
+
+def test_share_tailscale_dns_parse_and_hint():
+    js = '{"Self": {"DNSName": "mybox.tail1234.ts.net."}}'
+    assert sharemod._dns_from_status(js) == "mybox.tail1234.ts.net"
+    assert sharemod._dns_from_status('{"Self": {}}') is None
+    assert sharemod._dns_from_status("not json") is None
+    assert sharemod._dns_from_status("{}") is None
+    assert "tailscale" in sharemod.tailscale_hint(True)
+    assert sharemod.tailscale_hint(False) is None
+
+
+def test_share_caddyfile_https_block_uses_internal_ca():
+    from perch import proxy as proxymod
+    m = Manifest("p", [svc("web", port=8080)])
+    out = proxymod.caddyfile(m, {"web": {"port": 8100, "https": True}})
+    assert "https://:8100 {" in out and "tls internal" in out
+    assert "reverse_proxy perch-p-web:8080" in out
+    plain = proxymod.caddyfile(m, {"web": {"port": 8100, "https": False}})
+    assert "http://:8100 {" in plain and "tls internal" not in plain
+
+
+def test_share_cli_rejects_https_plus_tailscale():
+    from perch.cli import main
+    try:
+        main(["share", "web", "--https", "--tailscale"])
+        assert False, "combo must exit"
+    except SystemExit as e:
+        assert "pick one" in str(e.code)
+
+
+def _mdns_query(name, qtype=1, qclass=1, flags=0):
+    import struct as _s
+    from perch import mdns
+    return (_s.pack("!6H", 0, flags, 1, 0, 0, 0)
+            + mdns.encode_name(name) + _s.pack("!2H", qtype, qclass))
+
+
+def test_mdns_name_roundtrip():
+    from perch import mdns
+    raw = mdns.encode_name("web.local")
+    assert mdns.decode_name(raw, 0) == ("web.local", len(raw))
+    try:
+        mdns.encode_name("bad..label"); assert False
+    except ValueError:
+        pass
+
+
+def test_mdns_answers_matching_a_query():
+    import socket as _sock
+    from perch import mdns
+    names = {"web.local": "192.168.1.42"}
+    for qtype in (1, 255):                              # A and ANY
+        resp = mdns.answer(_mdns_query("web.local", qtype=qtype), names)
+        assert resp is not None
+        assert resp[2:4] == b"\x84\x00"                 # authoritative response
+        assert _sock.inet_aton("192.168.1.42") in resp
+    # case-insensitive; unicast-response bit in qclass still matches
+    assert mdns.answer(_mdns_query("WEB.LOCAL"), names) is not None
+    assert mdns.answer(_mdns_query("web.local", qclass=0x8001), names) is not None
+
+
+def test_mdns_fails_closed():
+    from perch import mdns
+    names = {"web.local": "192.168.1.42"}
+    assert mdns.answer(_mdns_query("other.local"), names) is None      # not ours
+    assert mdns.answer(_mdns_query("web.local", qtype=28), names) is None  # AAAA
+    assert mdns.answer(_mdns_query("web.local", flags=0x8400), names) is None  # a response
+    assert mdns.answer(b"\x00\x01", names) is None                     # truncated
+    assert mdns.answer(_mdns_query("web.local")[:-2], names) is None   # cut question
+    assert mdns.answer(b"", names) is None
+
+
 def test_doctor_runtime_flavor_matrix():
     from perch.cli import _runtime_flavor
     assert "Desktop" in _runtime_flavor("Docker Desktop 4.30", "5.15.146")

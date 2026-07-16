@@ -158,6 +158,36 @@ the specific cause and fix:
 - Sharing is plain HTTP on the LAN and the output says so; the final check is a
   teammate actually opening the URL.
 
+### Names and HTTPS on the intranet
+
+Three transports, in order of recommendation:
+
+| Option | Command | You get | The trade |
+|---|---|---|---|
+| **Plain HTTP** (default) | `perch share web` | `http://<LAN-IP>:<port>`, zero setup | No TLS; browser features that need a secure context (camera, clipboard, service workers) stay off |
+| **Tailscale Serve** (recommended when IT allows it) | `perch share web --tailscale` | `https://<machine>.<tailnet>.ts.net`: a stable name and a publicly trusted certificate, provisioned automatically; no firewall rule needed | Teammates must install Tailscale and join your tailnet; some IT departments block VPN clients |
+| **Caddy internal CA** | `perch share web --https` | `https://<LAN-IP>:<port>` with real TLS from the proxy's own CA | Browsers warn until each teammate trusts the root cert once (below) |
+
+**Recommended default:** plain HTTP for quick demos on a trusted office LAN;
+**Tailscale Serve the moment an app matters** (it is the only option with both a
+stable name and a certificate teammates' browsers already trust); the internal CA
+only when Tailscale is not allowed and you need a secure context.
+
+To trust the internal CA once per teammate machine, export the root certificate
+from the proxy and install it into the OS trust store:
+
+```bash
+docker exec perch-<project>-proxy cat /data/caddy/pki/authorities/local/root.crt > perch-root.crt
+# Windows: certutil -addstore -user Root perch-root.crt
+# macOS:   sudo security add-trusted-cert -d -k /Library/Keychains/System.keychain perch-root.crt
+```
+
+**Name instead of an IP (fallback):** `perch share web --mdns` announces
+`web.local` over multicast DNS and keeps running in the foreground (Ctrl-C to
+stop). No admin rights or DNS server needed, and most OSes resolve `.local` out of
+the box, but corporate networks commonly block mDNS across VLANs, which is why
+this is a fallback rather than the default.
+
 **Scope honestly stated:** a workstation is a stopgap for demos and
 work-in-progress. It sleeps, reboots for updates, and sits outside IT's backup and
 monitoring. When teammates start relying on an app, graduate it to a small
