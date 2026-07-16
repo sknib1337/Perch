@@ -736,9 +736,13 @@ def test_seal_roundtrip_and_tamper():
             assert cryptomod.is_sealed(token)
             assert s.unseal(token) == pt                         # round-trip
         token = s.seal(b"sensitive-credential")
-        # flip one base64 char in the body -> authentication must fail (no plaintext)
+        # flip one base64 char in the body -> authentication must fail (no plaintext).
+        # Condition on body[0] (the char being replaced): conditioning on any other
+        # char makes the "tamper" a no-op whenever the body already starts with "A",
+        # which made this test flake roughly 1 run in 64.
         scheme, _, body = token.partition(".")
-        bad = scheme + "." + (("A" if body[-1] != "A" else "B") + body[1:])
+        bad = scheme + "." + (("A" if body[0] != "A" else "B") + body[1:])
+        assert bad != token                                  # the tamper must be real
         try:
             s.unseal(bad); assert False, "tamper must be rejected"
         except cryptomod.SealError:
